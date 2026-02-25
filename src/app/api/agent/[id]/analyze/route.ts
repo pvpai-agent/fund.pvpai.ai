@@ -4,6 +4,7 @@ import { getUserByWallet } from '@/services/user.service';
 import { getAgentById } from '@/services/agent.service';
 import { getMarkPrice, getCandleData } from '@/lib/hyperliquid/trading';
 import { evaluateSignalWithAI } from '@/lib/claude/signal-evaluator';
+import { getAgentAssets } from '@/types/database';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = requireAuth(req);
@@ -19,14 +20,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     // Fetch market data + candles for the agent's asset
-    const agentAsset = agent.parsed_rules?.asset ?? 'BTC';
+    const agentAsset = getAgentAssets(agent.parsed_rules)[0];
     const [price, candles] = await Promise.all([
       getMarkPrice(agentAsset),
       getCandleData(agentAsset, '1h', 24),
     ]);
 
     // Run AI analysis — Claude uses web_search to autonomously find news
-    const aiResult = await evaluateSignalWithAI(agent.parsed_rules, price, candles);
+    const aiResult = await evaluateSignalWithAI(agent.parsed_rules, price, candles, agentAsset);
 
     // Last 6 candles for terminal display
     const recentCandles = candles.slice(-6).map((c) => ({

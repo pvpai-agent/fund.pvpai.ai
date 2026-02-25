@@ -12,10 +12,12 @@ Available assets (use the exact symbol):
 - Forex: xyz:PEUR
 
 Rules:
-- Identify the best matching asset from the available list based on the user's description
-- If the user mentions a stock like "NVDA" or "Nvidia", use "xyz:NVDA"
-- If the user mentions crypto like "Bitcoin" or "BTC", use "BTC"
-- If no specific asset is mentioned, default to "BTC"
+- Identify ALL matching assets from the available list based on the user's description
+- An agent can trade MULTIPLE assets — return an array of asset symbols
+- If the user mentions a stock like "NVDA" or "Nvidia", include "xyz:NVDA"
+- If the user mentions crypto like "Bitcoin" or "BTC", include "BTC"
+- If the user mentions a broad sector (e.g. "tech stocks"), include all relevant assets
+- If no specific asset is mentioned, default to ["BTC"]
 - Maximum leverage is 10x
 - Extract clear trigger conditions from the user's description
 - If the user doesn't specify risk parameters, use sensible defaults:
@@ -39,7 +41,7 @@ export async function parseStrategy(userPrompt: string): Promise<TradingStrategy
     messages: [
       {
         role: 'user',
-        content: `Parse this trading strategy into structured JSON:\n\n"${userPrompt}"\n\nRespond with ONLY valid JSON matching this schema:\n{\n  "name": string,\n  "description": string,\n  "asset": string (use the exact symbol from the available assets list),\n  "direction_bias": "long" | "short" | "both",\n  "triggers": [{ "type": "keyword"|"price_level"|"time_based"|"momentum", "condition": string, "parameters": {} }],\n  "risk_management": { "max_position_size_pct": number, "stop_loss_pct": number, "take_profit_pct": number, "max_leverage": number, "max_daily_trades": number },\n  "keywords": string[]\n}`,
+        content: `Parse this trading strategy into structured JSON:\n\n"${userPrompt}"\n\nRespond with ONLY valid JSON matching this schema:\n{\n  "name": string,\n  "description": string,\n  "assets": string[] (array of asset symbols from the available list — can be one or many),\n  "direction_bias": "long" | "short" | "both",\n  "triggers": [{ "type": "keyword"|"price_level"|"time_based"|"momentum", "condition": string, "parameters": {} }],\n  "risk_management": { "max_position_size_pct": number, "stop_loss_pct": number, "take_profit_pct": number, "max_leverage": number, "max_daily_trades": number },\n  "keywords": string[]\n}`,
       },
     ],
   });

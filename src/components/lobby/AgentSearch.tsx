@@ -130,7 +130,7 @@ export function AgentSearch({ agents, onClose }: AgentSearchProps) {
                     {msg.agents.map((agent) => {
                       const roi = agent.allocated_funds > 0 ? ((agent.total_pnl / agent.allocated_funds) * 100) : 0;
                       const pnlSign = agent.total_pnl >= 0 ? '+' : '';
-                      const asset = (agent.parsed_rules?.asset ?? 'BTC').replace('xyz:', '');
+                      const asset = (agent.parsed_rules?.assets ?? ['BTC']).map(a => a.replace('xyz:', '')).join(', ');
                       return (
                         <Link
                           key={agent.id}

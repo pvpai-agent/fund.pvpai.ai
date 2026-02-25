@@ -44,6 +44,7 @@ export async function getCandleData(
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(8000),
     });
     const raw = await res.json();
     const candles: CandleData[] = (Array.isArray(raw) ? raw : [])
@@ -258,11 +259,12 @@ export async function getMarkPrice(symbol: string): Promise<number> {
   const { dex } = parseDex(symbol);
 
   if (dex) {
-    // Community dex — use raw API with dex param
+    // Community dex — use raw API with dex param (8s timeout)
     const res = await fetch(HL_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type: 'metaAndAssetCtxs', dex }),
+      signal: AbortSignal.timeout(8000),
     });
     const data = await res.json();
     const meta = data[0];
@@ -274,12 +276,21 @@ export async function getMarkPrice(symbol: string): Promise<number> {
     throw new Error(`No price found for ${symbol}`);
   }
 
-  // Standard perp — use SDK
-  const hl = await getHyperliquidClient();
-  const mids = await hl.info.getAllMids();
-  const price = (mids as Record<string, string>)[symbol];
-  if (!price) throw new Error(`No price found for ${symbol}`);
-  return Number(price);
+  // Standard perp — use raw API (more reliable than SDK, no wallet config needed)
+  const res = await fetch(HL_API, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'metaAndAssetCtxs' }),
+    signal: AbortSignal.timeout(8000),
+  });
+  const data = await res.json();
+  const meta = data[0];
+  const ctxs = data[1] as Array<{ markPx: string }>;
+  const idx = (meta.universe as Array<{ name: string }>).findIndex((a) => a.name === symbol);
+  if (idx >= 0 && ctxs[idx]) {
+    return Number(ctxs[idx].markPx);
+  }
+  throw new Error(`No price found for ${symbol}`);
 }
 
 /** Get recent fills (trade executions) for the account */

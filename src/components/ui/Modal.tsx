@@ -33,7 +33,7 @@ export function Modal({ isOpen, onClose, title, children }: ModalProps) {
           onClick={(e) => { if (e.target === overlayRef.current) onClose(); }}
         >
           <motion.div
-            className="w-full max-w-lg border border-cyber-green/30 bg-cyber-dark rounded-lg shadow-2xl"
+            className="w-full max-w-lg border border-terminal-border bg-cyber-dark rounded-lg shadow-2xl"
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
             exit={{ scale: 0.9, opacity: 0 }}

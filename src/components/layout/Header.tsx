@@ -27,7 +27,7 @@ export function Header() {
             <span className="text-cyber-green font-bold text-sm">P</span>
           </div>
           <GlitchText
-            text="PVP AI"
+            text="PVPAI OS"
             className="text-xl font-bold font-mono text-cyber-green tracking-widest"
             glitchInterval={5000}
           />

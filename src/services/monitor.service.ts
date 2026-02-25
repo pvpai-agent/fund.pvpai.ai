@@ -6,7 +6,7 @@ import { getPositions, closePosition, getMarkPrice, getCandleData, type CandleDa
 import { evaluateSignalWithAI } from '@/lib/claude/signal-evaluator';
 import { TRADING } from '@/constants/trading';
 import { mockAddAnalysisLog } from '@/lib/mock-db';
-import type { Trade } from '@/types/database';
+import { type Trade, getAgentAssets } from '@/types/database';
 
 export interface MonitorResult {
   agentsChecked: number;
@@ -52,83 +52,91 @@ export async function checkAllActiveAgents(): Promise<MonitorResult> {
         }
       }
 
-      // Fetch candles for this agent's specific asset
-      const agentAsset = agent.parsed_rules?.asset ?? 'BTC';
-      let price: number;
-      let candles: CandleData[] = [];
+      // Fetch candles for each of the agent's assets
+      const agentAssets = getAgentAssets(agent.parsed_rules);
 
-      try {
-        const [md, candleData] = await Promise.all([
-          getCurrentMarketData(agentAsset),
-          getCandleData(agentAsset, '1h', 24),
-        ]);
-        price = md.price;
-        candles = candleData;
-      } catch (err) {
-        result.errors.push(`Agent ${agent.name}: Failed to get market data for ${agentAsset}: ${err instanceof Error ? err.message : 'Unknown'}`);
-        continue;
-      }
+      for (const agentAsset of agentAssets) {
+        let price: number;
+        let candles: CandleData[] = [];
 
-      console.log(`[MONITOR] Analyzing ${agent.name} | ${agentAsset} @ $${price.toFixed(2)} | ${candles.length} candles`);
-
-      // AI-powered signal evaluation:
-      // Claude uses web_search tool to autonomously find relevant news,
-      // then combines with K-line candle data to make trading decisions
-      const aiSignal = await evaluateSignalWithAI(
-        agent.parsed_rules,
-        price,
-        candles
-      );
-
-      // Log every analysis result (trade or not) for admin visibility
-      mockAddAnalysisLog({
-        agent_id: agent.id,
-        agent_name: agent.name,
-        price,
-        news_count: aiSignal?.matchedHeadlines?.length ?? 0,
-        candle_count: candles.length,
-        confidence: aiSignal?.confidence ?? 0,
-        direction: aiSignal?.direction ?? 'long',
-        reason: aiSignal?.reason ?? 'No actionable signal',
-        technical_summary: aiSignal?.technicalSummary ?? '',
-        matched_headlines: aiSignal?.matchedHeadlines ?? [],
-        should_trade: !!aiSignal?.shouldTrade,
-      });
-
-      if (aiSignal) {
-        const signal: TradeSignal = {
-          direction: aiSignal.direction,
-          reason: `[AI ${aiSignal.confidence}%] ${aiSignal.reason}`,
-          data: {
-            confidence: aiSignal.confidence,
-            matchedHeadlines: aiSignal.matchedHeadlines,
-            price,
-          },
-        };
-        result.signals.push({ agentId: agent.id, signal });
-
-        const positionSizePct = agent.parsed_rules.risk_management.max_position_size_pct;
-        const sizeUsd = (Number(agent.capital_balance) * positionSizePct) / 100;
-
-        if (sizeUsd < TRADING.MIN_TRADE_SIZE_USD) {
-          result.errors.push(`Agent ${agent.id}: Insufficient capital for trade (${sizeUsd} USD)`);
+        try {
+          const [md, candleData] = await Promise.all([
+            getCurrentMarketData(agentAsset),
+            getCandleData(agentAsset, '1h', 24),
+          ]);
+          price = md.price;
+          candles = candleData;
+        } catch (err) {
+          result.errors.push(`Agent ${agent.name}: Failed to get market data for ${agentAsset}: ${err instanceof Error ? err.message : 'Unknown'}`);
           continue;
         }
 
-        await burnEnergy(agent.id, 'trade_open');
+        console.log(`[MONITOR] Analyzing ${agent.name} | ${agentAsset} @ $${price.toFixed(2)} | ${candles.length} candles`);
 
-        await openTrade({
-          agentId: agent.id,
-          userId: agent.user_id,
-          direction: signal.direction,
-          sizeUsd: Math.min(sizeUsd, TRADING.MAX_TRADE_SIZE_USD),
-          leverage: agent.parsed_rules.risk_management.max_leverage,
-          triggerReason: signal.reason,
-          triggerData: signal.data,
+        // AI-powered signal evaluation:
+        // Claude uses web_search tool to autonomously find relevant news,
+        // then combines with K-line candle data to make trading decisions
+        const aiSignal = await evaluateSignalWithAI(
+          agent.parsed_rules,
+          price,
+          candles,
+          agentAsset
+        );
+
+        // Log every analysis result (trade or not) for admin visibility
+        mockAddAnalysisLog({
+          agent_id: agent.id,
+          agent_name: agent.name,
+          price,
+          news_count: aiSignal?.matchedHeadlines?.length ?? 0,
+          candle_count: candles.length,
+          confidence: aiSignal?.confidence ?? 0,
+          direction: aiSignal?.direction ?? 'long',
+          reason: aiSignal?.reason ?? 'No actionable signal',
+          technical_summary: aiSignal?.technicalSummary ?? '',
+          matched_headlines: aiSignal?.matchedHeadlines ?? [],
+          should_trade: !!aiSignal?.shouldTrade,
         });
 
-        result.tradesOpened++;
-        console.log(`[MONITOR] Agent ${agent.name} opened ${signal.direction} on ${agentAsset} — ${signal.reason}`);
+        if (aiSignal?.shouldTrade) {
+          const signal: TradeSignal = {
+            direction: aiSignal.direction,
+            reason: `[AI ${aiSignal.confidence}%] ${aiSignal.reason}`,
+            data: {
+              confidence: aiSignal.confidence,
+              matchedHeadlines: aiSignal.matchedHeadlines,
+              technicalSummary: aiSignal.technicalSummary ?? '',
+              dataSources: agent.parsed_rules.data_sources ?? ['hl_kline', 'ai_web_search'],
+              price,
+              analyzedAt: new Date().toISOString(),
+            },
+          };
+          result.signals.push({ agentId: agent.id, signal });
+
+          const positionSizePct = agent.parsed_rules.risk_management.max_position_size_pct;
+          const sizeUsd = (Number(agent.capital_balance) * positionSizePct) / 100;
+
+          if (sizeUsd < TRADING.MIN_TRADE_SIZE_USD) {
+            result.errors.push(`Agent ${agent.id}: Insufficient capital for trade (${sizeUsd} USD)`);
+            continue;
+          }
+
+          await burnEnergy(agent.id, 'trade_open');
+
+          await openTrade({
+            agentId: agent.id,
+            userId: agent.user_id,
+            direction: signal.direction,
+            sizeUsd: Math.min(sizeUsd, TRADING.MAX_TRADE_SIZE_USD),
+            leverage: agent.parsed_rules.risk_management.max_leverage,
+            triggerReason: signal.reason,
+            triggerData: signal.data,
+            symbol: agentAsset,
+          });
+
+          result.tradesOpened++;
+          console.log(`[MONITOR] Agent ${agent.name} opened ${signal.direction} on ${agentAsset} — ${signal.reason}`);
+        }
       }
     } catch (err) {
       result.errors.push(`Agent ${agent.id}: ${err instanceof Error ? err.message : 'Unknown error'}`);

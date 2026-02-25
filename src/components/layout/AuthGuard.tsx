@@ -26,7 +26,7 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
             Access Required
           </h2>
           <p className="text-gray-500 font-mono text-sm max-w-md">
-            Connect your wallet to access the PVP AI Agent Lab.
+            Connect your wallet to access PVPAI OS.
             <br />
             Supported: MetaMask, WalletConnect, Coinbase Wallet
           </p>

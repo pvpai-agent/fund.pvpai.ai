@@ -14,7 +14,7 @@ const queryClient = new QueryClient();
 const projectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID ?? '';
 
 const metadata = {
-  name: 'PVP AI - The Agent Lab',
+  name: 'PVPAI OS',
   description: 'AI-powered autonomous trading agents on Hyperliquid',
   url: typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3000',
   icons: ['/images/logo.svg'],

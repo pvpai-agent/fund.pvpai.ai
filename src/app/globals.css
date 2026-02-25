@@ -30,37 +30,37 @@
 /* Light mode overrides */
 html.light {
   --theme-cyber-black: #ffffff;
-  --theme-cyber-dark: #f8f9fa;
-  --theme-cyber-darker: #f0f1f3;
-  --theme-terminal-bg: #f5f6f8;
-  --theme-terminal-border: #d1d5db;
+  --theme-cyber-dark: #f7f8fa;
+  --theme-cyber-darker: #eef0f3;
+  --theme-terminal-bg: #f2f3f6;
+  --theme-terminal-border: #b8bcc6;
 
   /* Gray scale — inverted for light backgrounds, high contrast */
   --theme-gray-200: #111827;
   --theme-gray-300: #1f2937;
   --theme-gray-400: #374151;
   --theme-gray-500: #4b5563;
-  --theme-gray-600: #596373;
-  --theme-gray-700: #6b7280;
+  --theme-gray-600: #525c6b;
+  --theme-gray-700: #64707e;
   --theme-gray-800: #e5e7eb;
 
-  --theme-body-color: #1a1a2e;
-  --theme-scrollbar-track: #f0f1f3;
-  --theme-scrollbar-thumb: #00cc33;
-  --theme-scrollbar-hover: #0099cc;
-  --theme-selection-bg: rgba(0, 204, 51, 0.2);
+  --theme-body-color: #111827;
+  --theme-scrollbar-track: #eef0f3;
+  --theme-scrollbar-thumb: #00883a;
+  --theme-scrollbar-hover: #007099;
+  --theme-selection-bg: rgba(0, 136, 58, 0.2);
   --theme-selection-color: #000;
 
-  /* Slightly dimmed accents for text readability on white */
-  --color-cyber-green: #00a846;
-  --color-cyber-green-dim: #008838;
-  --color-cyber-blue: #008db8;
-  --color-cyber-blue-dim: #007099;
-  --color-cyber-purple: #a000d9;
-  --color-cyber-gold: #c49d00;
-  --color-cyber-red: #d90035;
-  --color-cyber-orange: #d95500;
-  --color-terminal-text: #00a846;
+  /* Stronger accents for WCAG AA readability on white backgrounds */
+  --color-cyber-green: #007a33;
+  --color-cyber-green-dim: #006328;
+  --color-cyber-blue: #006d8f;
+  --color-cyber-blue-dim: #005876;
+  --color-cyber-purple: #7a00a8;
+  --color-cyber-gold: #8a6d00;
+  --color-cyber-red: #c0002b;
+  --color-cyber-orange: #b34400;
+  --color-terminal-text: #007a33;
 }
 
 @theme inline {
@@ -177,6 +177,24 @@ html.light .crt-curve {
 html.light .pulse-glow {
   animation: none;
   box-shadow: 0 0 3px var(--color-cyber-green);
+}
+
+/* Light mode — card depth via subtle shadows */
+html.light .border-terminal-border {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+
+/* Light mode — strengthen low-opacity accent backgrounds */
+html.light [class*="bg-cyber-green\\/5"],
+html.light [class*="bg-cyber-green\\/10"] {
+  background-color: rgba(0, 122, 51, 0.12) !important;
+}
+html.light [class*="bg-cyber-blue\\/5"],
+html.light [class*="bg-cyber-blue\\/10"] {
+  background-color: rgba(0, 109, 143, 0.12) !important;
+}
+html.light [class*="bg-cyber-red\\/10"] {
+  background-color: rgba(192, 0, 43, 0.1) !important;
 }
 
 /* ====== ANIMATIONS ====== */

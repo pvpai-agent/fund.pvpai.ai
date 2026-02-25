@@ -14,7 +14,7 @@ function buildAgentSummary(agents: Agent[]): string {
       return [
         `ID:${a.id}`,
         `Name:${a.name}`,
-        `Asset:${rules?.asset ?? 'unknown'}`,
+        `Assets:${(rules?.assets ?? ['unknown']).join(',')}`,
         `Tier:${rules?.tier ?? 'scout'}`,
         `Bias:${rules?.direction_bias ?? 'both'}`,
         `ROI:${roi}%`,

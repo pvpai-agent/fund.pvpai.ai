@@ -75,7 +75,7 @@ export function ExploreContent({ agents }: ExploreContentProps) {
     const scored = activeAgents.map((a) => {
       let score = 0;
       const roi = a.allocated_funds > 0 ? a.total_pnl / a.allocated_funds : 0;
-      const asset = (a.parsed_rules?.asset ?? '').toLowerCase();
+      const assetStr = (a.parsed_rules?.assets ?? []).join(',').toLowerCase();
       const dir = (a.parsed_rules?.direction_bias ?? '').toLowerCase();
       const tier = (a.parsed_rules?.tier ?? '').toLowerCase();
       const lev = a.parsed_rules?.risk_management?.max_leverage ?? 3;
@@ -91,7 +91,7 @@ export function ExploreContent({ agents }: ExploreContentProps) {
           score = lev * 15 + Math.abs(roi * 50) + (tier === 'predator' ? 30 : 0);
           break;
         case 'tech':
-          if (['nvda', 'aapl', 'msft', 'meta', 'goog', 'amzn', 'pltr', 'tsla'].some(s => asset.includes(s))) score += 50;
+          if (['nvda', 'aapl', 'msft', 'meta', 'goog', 'amzn', 'pltr', 'tsla'].some(s => assetStr.includes(s))) score += 50;
           score += roi * 20 + a.win_rate;
           break;
         case 'new':
@@ -157,7 +157,7 @@ export function ExploreContent({ agents }: ExploreContentProps) {
         <div className="space-y-3">
           {recommended.map((agent) => {
             const tier = agent.parsed_rules?.tier ?? 'scout';
-            const asset = (agent.parsed_rules?.asset ?? 'BTC').replace('xyz:', '');
+            const asset = (agent.parsed_rules?.assets ?? ['BTC']).map(a => a.replace('xyz:', '')).join(', ');
             const roi = agent.allocated_funds > 0 ? ((agent.total_pnl / agent.allocated_funds) * 100) : 0;
             const pnlSign = agent.total_pnl >= 0 ? '+' : '';
             const direction = agent.parsed_rules?.direction_bias ?? 'both';
@@ -175,9 +175,14 @@ export function ExploreContent({ agents }: ExploreContentProps) {
                 className="flex items-start gap-4 p-4 bg-cyber-dark border border-terminal-border rounded-lg hover:border-cyber-purple/40 transition-all group"
               >
                 {/* Avatar */}
-                <div className={`w-12 h-12 rounded-lg ${avatarBg} flex items-center justify-center shrink-0`}>
-                  <span className="text-sm font-mono font-bold text-black">{tierGlyph(tier)}</span>
-                </div>
+                {agent.avatar_url ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={agent.avatar_url} alt="" className="w-12 h-12 rounded-lg shrink-0 object-cover" />
+                ) : (
+                  <div className={`w-12 h-12 rounded-lg ${avatarBg} flex items-center justify-center shrink-0`}>
+                    <span className="text-sm font-mono font-bold text-black">{tierGlyph(tier)}</span>
+                  </div>
+                )}
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">

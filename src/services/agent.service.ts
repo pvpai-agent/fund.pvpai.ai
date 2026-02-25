@@ -20,6 +20,7 @@ export interface CreateAgentInput {
   prompt: string;
   parsedRules: ParsedRules;
   avatarSeed: string;
+  avatarUrl?: string;
   allocatedFunds: number;
   energyBalance: number;
   capitalBalance: number;
@@ -47,6 +48,7 @@ export async function createAgent(input: CreateAgentInput): Promise<Agent> {
         prompt: input.prompt,
         parsed_rules: input.parsedRules,
         avatar_seed: input.avatarSeed,
+        avatar_url: input.avatarUrl ?? null,
         ai_wallet: aiWallet,
         allocated_funds: input.allocatedFunds,
         energy_balance: input.energyBalance,

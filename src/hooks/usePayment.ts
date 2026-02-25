@@ -51,7 +51,7 @@ export function usePayment() {
   const verifyAgentMint = async (
     txHash: string,
     mintAmount: number,
-    agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; cloneParentId?: string }
+    agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; avatarUrl?: string; cloneParentId?: string }
   ) => {
     try {
       const controller = new AbortController();
@@ -86,5 +86,23 @@ export function usePayment() {
     }
   };
 
-  return { sendPayment, verifyAgentMint, verifyRecharge, isPending, error };
+  const verifyPromotion = async (
+    txHash: string,
+    amount: number,
+    hours: number,
+    agentId: string
+  ) => {
+    try {
+      const res = await fetch(`/api/agent/${agentId}/promote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ txHash, amount, hours }),
+      });
+      return await res.json();
+    } catch {
+      return { success: false, error: 'Promotion verification failed' };
+    }
+  };
+
+  return { sendPayment, verifyAgentMint, verifyRecharge, verifyPromotion, isPending, error };
 }

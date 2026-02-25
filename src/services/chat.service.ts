@@ -105,7 +105,7 @@ function buildAgentContext(agent: Agent): string {
     lines.push(
       `STRATEGY: ${rules.description ?? 'Unknown'}`,
       `DIRECTION: ${rules.direction_bias ?? 'neutral'}`,
-      `ASSET: ${rules.asset ?? 'BTC'}`,
+      `ASSETS: ${(rules.assets ?? ['BTC']).map(a => a.replace('xyz:', '')).join(', ')}`,
       `KEYWORDS: ${(rules.keywords ?? []).join(', ')}`,
     );
     if (rules.risk_management) {

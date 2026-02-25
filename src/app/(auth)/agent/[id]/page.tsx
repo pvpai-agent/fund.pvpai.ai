@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useState, useEffect, useCallback } from 'react';
+import { use, useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useAccount } from 'wagmi';
@@ -10,7 +10,7 @@ import { useUsdcBalance } from '@/hooks/useUsdcBalance';
 import { useTerminal } from '@/hooks/useTerminal';
 import { useConfetti } from '@/hooks/useConfetti';
 import { formatUsd, formatPnl, formatFuel, estimateLifespan } from '@/lib/utils/format';
-import { METABOLISM, AGENT_TIERS } from '@/constants/trading';
+import { METABOLISM, AGENT_TIERS, DATA_SOURCES } from '@/constants/trading';
 import type { AgentTier } from '@/constants/trading';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -30,15 +30,16 @@ import { useInvestments } from '@/hooks/useInvestments';
 import { useUser } from '@/hooks/useUser';
 import { canUpgrade } from '@/constants/upgrades';
 import { useT } from '@/hooks/useTranslation';
+import { getAgentAssets } from '@/types/database';
 
 export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const { address, chainId: currentChainId } = useAccount();
   const { agent, trades, energyData, isLoading, refetchAgent } = useAgent(id);
-  const { sendPayment, verifyRecharge } = usePayment();
+  const { sendPayment, verifyRecharge, verifyPromotion } = usePayment();
   const { balance: usdcBalance, isLoading: balanceLoading, refetch: refetchBalance } = useUsdcBalance();
-  const { logs } = useTerminal({
+  const { logs, liveData } = useTerminal({
     agentId: id,
     enabled: !isLoading && agent?.status === 'active',
     trades,
@@ -47,10 +48,40 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const [showEnergyLog, setShowEnergyLog] = useState(false);
   const [showRecharge, setShowRecharge] = useState(false);
+  const [rechargeTab, setRechargeTab] = useState<'usdc' | 'points'>('usdc');
   const [rechargeAmount, setRechargeAmount] = useState(20);
   const [rechargeStatus, setRechargeStatus] = useState<'idle' | 'paying' | 'verifying' | 'success' | 'error'>('idle');
   const [rechargeError, setRechargeError] = useState('');
+  const [pointsAmount, setPointsAmount] = useState(200);
+  const [pointsRechargeStatus, setPointsRechargeStatus] = useState<'idle' | 'processing' | 'success'>('idle');
   const [expandedTrade, setExpandedTrade] = useState<string | null>(null);
+  const [manualAnalysis, setManualAnalysis] = useState<{
+    confidence: number; direction: string; reason: string;
+    technicalSummary: string; matchedHeadlines: string[];
+    shouldTrade: boolean; analyzedAt: string;
+  } | null>(null);
+  const [analysisLoading, setAnalysisLoading] = useState(false);
+  const analyzeTriggeredRef = useRef(false);
+
+  // Auto-trigger AI analysis when page loads and no cached analysis exists
+  useEffect(() => {
+    if (!agent || agent.status !== 'active' || analyzeTriggeredRef.current) return;
+    if (liveData?.analysis || manualAnalysis) return; // already have analysis
+    // Wait for first feed poll to come back, then check if we need to trigger
+    if (!liveData) return;
+    analyzeTriggeredRef.current = true;
+    setAnalysisLoading(true);
+    fetch(`/api/agent/${id}/analyze`, { method: 'POST' })
+      .then(res => res.json())
+      .then(json => {
+        if (json.success && json.data?.analysis) {
+          setManualAnalysis(json.data.analysis);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setAnalysisLoading(false));
+  }, [agent, id, liveData, manualAnalysis]);
+
   const [showSosModal, setShowSosModal] = useState(false);
   const [showInvestModal, setShowInvestModal] = useState(false);
   const [showWithdrawModal, setShowWithdrawModal] = useState(false);
@@ -72,20 +103,27 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [editStopLoss, setEditStopLoss] = useState(5);
   const [editTakeProfit, setEditTakeProfit] = useState(10);
   const [savingStrategy, setSavingStrategy] = useState(false);
+  const [aiParseLoading, setAiParseLoading] = useState(false);
+  const [aiParsePrompt, setAiParsePrompt] = useState('');
+  const [showShareMenu, setShowShareMenu] = useState(false);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showPromoteModal, setShowPromoteModal] = useState(false);
   const [promoteHours, setPromoteHours] = useState(1);
   const [promoteSlot, setPromoteSlot] = useState<1 | 2>(1);
   const [promoteStartOffset, setPromoteStartOffset] = useState(0); // hours from now
   const [promoteStatus, setPromoteStatus] = useState<'idle' | 'paying' | 'success' | 'error'>('idle');
 
+  const { user } = useUser();
+  const t = useT();
+
   // Progress messages for long-running withdrawal (HL → Arbitrum can take 1-5 min)
   const withdrawSteps = [
-    '检查钱包余额...',
-    '准备 USDC 转账...',
-    '正在从 Hyperliquid 提现...',
-    '跨链转账中，请耐心等待...',
-    '等待链上确认...',
-    '即将完成...',
+    t.withdrawSteps.checkBalance,
+    t.withdrawSteps.prepareTransfer,
+    t.withdrawSteps.withdrawFromHL,
+    t.withdrawSteps.crossChain,
+    t.withdrawSteps.waitConfirmation,
+    t.withdrawSteps.almostDone,
   ];
   useEffect(() => {
     if (creatorWithdrawStatus !== 'processing') {
@@ -97,9 +135,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }, 5000);
     return () => clearInterval(timer);
   }, [creatorWithdrawStatus, withdrawSteps.length]);
-
-  const { user } = useUser();
-  const t = useT();
   const { investments, withdraw } = useInvestments();
   const isCreator = !!(user && agent && user.id === agent.user_id);
   // Find user's active investment in THIS agent
@@ -117,6 +152,49 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     setEditingStrategy(true);
   };
 
+  // AI parse: calls Claude to interpret the user's edit request and fill form fields
+  const handleAiParse = async () => {
+    if (!agent || !aiParsePrompt.trim()) return;
+    setAiParseLoading(true);
+    try {
+      const res = await fetch('/api/agent/parse-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          currentStrategy: {
+            direction_bias: editDirection,
+            keywords: editKeywords.split(',').map((k) => k.trim()).filter(Boolean),
+            risk_management: {
+              max_leverage: editLeverage,
+              stop_loss_pct: editStopLoss,
+              take_profit_pct: editTakeProfit,
+            },
+          },
+          editPrompt: aiParsePrompt,
+        }),
+      });
+      const json = await res.json();
+      if (json.success && json.data) {
+        const d = json.data;
+        if (d.direction_bias) setEditDirection(d.direction_bias);
+        if (d.keywords) setEditKeywords(Array.isArray(d.keywords) ? d.keywords.join(', ') : d.keywords);
+        if (d.risk_management?.max_leverage) setEditLeverage(d.risk_management.max_leverage);
+        if (d.risk_management?.stop_loss_pct) setEditStopLoss(d.risk_management.stop_loss_pct);
+        if (d.risk_management?.take_profit_pct) setEditTakeProfit(d.risk_management.take_profit_pct);
+        setAiParsePrompt('');
+      } else {
+        setClaimToast(json.error || 'AI parse failed');
+        setTimeout(() => setClaimToast(''), 3000);
+      }
+    } catch {
+      setClaimToast('AI parse request failed');
+      setTimeout(() => setClaimToast(''), 3000);
+    } finally {
+      setAiParseLoading(false);
+    }
+  };
+
+  // Final save: commits the staged form values to the database
   const saveStrategy = async () => {
     if (!agent) return;
     setSavingStrategy(true);
@@ -140,6 +218,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         setEditingStrategy(false);
         refetchAgent();
         setClaimToast(t.agent.strategyUpdated);
+        setTimeout(() => setClaimToast(''), 2500);
+      } else {
+        setClaimToast(json.error || t.agent.strategyFailed);
         setTimeout(() => setClaimToast(''), 2500);
       }
     } catch {
@@ -255,7 +336,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       )}
 
       {/* ════════ LEFT COLUMN ════════ */}
-      <div className="flex-1 min-w-0 space-y-6">
+      <div className="flex-1 min-w-0 space-y-4">
         {/* Agent Header */}
         <div className={`flex items-start justify-between ${isDead ? 'opacity-40 grayscale' : ''}`}>
           <div className="flex items-center gap-4">
@@ -277,35 +358,66 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               <p className="text-xs font-mono text-gray-500 mt-0.5">
                 {tierConfig?.name ?? 'Agent'} — {agent.parsed_rules.description}
               </p>
-              {/* Clickable wallet address → BscScan */}
-              <a
-                href={`https://bscscan.com/address/${agent.ai_wallet ?? '0x'}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-[10px] font-mono text-cyber-blue/60 mt-0.5 hover:text-cyber-blue transition-colors"
-              >
-                {agent.ai_wallet ? `${agent.ai_wallet.slice(0, 6)}...${agent.ai_wallet.slice(-4)}` : '0x...'}
-                <span className="text-[8px]">↗</span>
-                <span className="text-gray-700 ml-1">BNB Chain</span>
-              </a>
+              {/* Asset badge — prefer live data, fallback to parsed_rules */}
+              <div className="flex items-center gap-2 mt-0.5">
+                <span className="inline-flex items-center gap-1 text-[10px] font-mono text-cyber-blue/60">
+                  {(liveData?.assets ?? getAgentAssets(agent.parsed_rules)).map(a => a.replace('xyz:', '')).join(', ')} | Hyperliquid
+                </span>
+                {agent.parsed_rules?.data_sources?.includes('orbit_space') && (
+                  <span className="relative group/orbit inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-mono uppercase tracking-wider border border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-400 cursor-help">
+                    {'\uD83D\uDEF0\uFE0F'} {t.common.orbitBadge}
+                    <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-60 px-3 py-2 rounded bg-cyber-darker border border-fuchsia-500/30 text-[10px] font-mono text-gray-300 leading-relaxed opacity-0 pointer-events-none group-hover/orbit:opacity-100 group-hover/orbit:pointer-events-auto transition-opacity duration-200 z-50 shadow-lg normal-case tracking-normal">
+                      {t.common.orbitTooltip}
+                    </span>
+                  </span>
+                )}
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {!isDead && (
-              <button
-                onClick={() => {
-                  const pnl = formatPnl(Number(agent.total_pnl));
-                  const text = `My AI agent "${agent.name}" is ${Number(agent.total_pnl) >= 0 ? 'up' : 'down'} ${pnl} on @pvp_ai!\n\nDeploy your own autonomous trading agent:`;
-                  const url = `${window.location.origin}/agent/${agent.id}`;
-                  window.open(
-                    `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
-                    '_blank'
-                  );
-                }}
-                className="px-2.5 py-1 text-[9px] font-mono font-bold uppercase tracking-wider rounded transition-all border border-gray-500 text-gray-300 hover:border-gray-200 hover:text-gray-200 hover:bg-gray-200/5"
-              >
-                {t.common.share}
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowShareMenu(!showShareMenu)}
+                  className="px-2.5 py-1 text-[9px] font-mono font-bold uppercase tracking-wider rounded transition-all border border-gray-500 text-gray-300 hover:border-gray-200 hover:text-gray-200 hover:bg-gray-200/5"
+                >
+                  {t.common.share}
+                </button>
+                {showShareMenu && (
+                  <>
+                    <div className="fixed inset-0 z-40" onClick={() => setShowShareMenu(false)} />
+                    <div className="absolute right-0 top-full mt-1 z-50 w-48 bg-cyber-dark border border-terminal-border rounded-lg shadow-lg overflow-hidden">
+                      <button
+                        onClick={() => {
+                          const url = `${window.location.origin}/agent/${agent.id}`;
+                          navigator.clipboard.writeText(url);
+                          setShowShareMenu(false);
+                          setClaimToast(t.agent.linkCopied);
+                          setTimeout(() => setClaimToast(''), 2000);
+                        }}
+                        className="w-full px-3 py-2.5 text-left text-xs font-mono text-gray-300 hover:bg-cyber-green/10 hover:text-cyber-green transition-colors flex items-center gap-2"
+                      >
+                        <span className="text-sm">{'\uD83D\uDCCB'}</span> {t.agent.copyLink}
+                      </button>
+                      <button
+                        onClick={() => {
+                          const pnl = formatPnl(Number(agent.total_pnl));
+                          const text = `My AI agent "${agent.name}" is ${Number(agent.total_pnl) >= 0 ? 'up' : 'down'} ${pnl} on @pvp_ai!\n\nDeploy your own autonomous trading agent:`;
+                          const url = `${window.location.origin}/agent/${agent.id}`;
+                          window.open(
+                            `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
+                            '_blank'
+                          );
+                          setShowShareMenu(false);
+                        }}
+                        className="w-full px-3 py-2.5 text-left text-xs font-mono text-gray-300 hover:bg-cyber-blue/10 hover:text-cyber-blue transition-colors flex items-center gap-2"
+                      >
+                        <span className="text-sm">{'\uD835\uDD4F'}</span> {t.agent.shareToX}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
             )}
             <Badge
               variant={
@@ -320,218 +432,184 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           </div>
         </div>
 
-        {/* Agent Details — Folded Accordion */}
+        {/* YOUR POSITION — Hero Card (prominent to attract deposits) */}
+        <div className={isDead ? 'opacity-40 grayscale' : ''}>
+          <NeonBorder color="green" animate={!isDead}>
+            <Card className="!py-5 !px-5 bg-gradient-to-br from-cyber-dark via-cyber-dark to-cyber-green/5">
+              {/* Row 1: Position value + Sparkline + Buttons */}
+              <div className="flex items-center gap-4">
+                {/* Left: value */}
+                <div className="shrink-0">
+                  <p className="text-[10px] font-mono text-gray-500 uppercase tracking-wider mb-1">{t.agent.yourPosition}</p>
+                  <p className="text-3xl font-bold font-mono text-white">
+                    {formatUsd(totalPosition)}
+                    <span className="text-sm text-gray-500 font-normal ml-2">USDC</span>
+                  </p>
+                </div>
+
+                {/* Center: Portfolio P&L sparkline (based on open position value at each candle) */}
+                <div className="flex-1 min-w-0 h-16 flex items-center justify-center">
+                  {liveData && liveData.candles.length >= 2 ? (() => {
+                    const positions = liveData.openPositions ?? [];
+                    const baseCapital = displayCapital;
+
+                    // Compute portfolio value at each candle point
+                    const values = liveData.candles.map(candle => {
+                      let pnlAtPrice = 0;
+                      for (const pos of positions) {
+                        if (pos.direction === 'long') {
+                          pnlAtPrice += (candle.close - pos.entryPrice) * pos.size;
+                        } else {
+                          pnlAtPrice += (pos.entryPrice - candle.close) * pos.size;
+                        }
+                      }
+                      return baseCapital + pnlAtPrice;
+                    });
+
+                    // If no positions, show flat capital line
+                    const hasPositions = positions.length > 0;
+                    const data = hasPositions ? values : values.map(() => baseCapital);
+
+                    const min = Math.min(...data);
+                    const max = Math.max(...data);
+                    const range = max - min || 1;
+                    const w = 200;
+                    const h = 48;
+                    const step = w / (data.length - 1);
+                    const points = data.map((v, i) => `${(i * step).toFixed(1)},${(h - ((v - min) / range) * (h - 4) - 2).toFixed(1)}`).join(' ');
+                    const isUp = data[data.length - 1] >= data[0];
+                    const color = isUp ? '#00ff41' : '#ff3232';
+                    const areaPoints = `0,${h} ${points} ${w},${h}`;
+
+                    // Current unrealized P&L
+                    const currentPnl = liveData.totalUnrealizedPnl ?? 0;
+                    const pnlPct = baseCapital > 0 ? (currentPnl / baseCapital) * 100 : 0;
+
+                    return (
+                      <>
+                        <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-full max-w-[200px]" preserveAspectRatio="none">
+                          <defs>
+                            <linearGradient id="sparkGrad" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="0%" stopColor={color} stopOpacity="0.3" />
+                              <stop offset="100%" stopColor={color} stopOpacity="0" />
+                            </linearGradient>
+                          </defs>
+                          <polygon points={areaPoints} fill="url(#sparkGrad)" />
+                          <polyline points={points} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+                        </svg>
+                        <div className="ml-2 text-right shrink-0">
+                          <p className={`text-xs font-mono font-bold ${currentPnl >= 0 ? 'text-cyber-green' : 'text-cyber-red'}`}>
+                            {currentPnl >= 0 ? '+' : ''}{formatUsd(currentPnl)}
+                          </p>
+                          <p className={`text-[10px] font-mono ${pnlPct >= 0 ? 'text-cyber-green/70' : 'text-cyber-red/70'}`}>
+                            {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
+                          </p>
+                        </div>
+                      </>
+                    );
+                  })() : (
+                    <div className="w-full max-w-[200px] h-12 rounded bg-terminal-border/20 flex items-center justify-center">
+                      <span className="text-[9px] font-mono text-gray-700">loading chart...</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Right: buttons */}
+                <div className="flex flex-col gap-1.5 shrink-0">
+                  {!isDead && (
+                    <>
+                      <button
+                        onClick={() => setShowInvestModal(true)}
+                        className="px-4 py-2 text-xs font-mono font-bold uppercase tracking-wider rounded-lg bg-cyber-green/20 border border-cyber-green/60 text-cyber-green hover:bg-cyber-green/30 transition-all shadow-[0_0_12px_rgba(0,255,65,0.2)] hover:shadow-[0_0_20px_rgba(0,255,65,0.35)]"
+                      >
+                        {t.common.deposit}
+                      </button>
+                      <button
+                        onClick={() => {
+                          if (isCreator) {
+                            setCreatorWithdrawAmount(Math.min(capital, Math.floor(capital)));
+                            setShowCreatorWithdraw(true);
+                          } else if (myInvestment) {
+                            setShowWithdrawModal(true);
+                          } else {
+                            setClaimToast(t.agent.noPosition);
+                            setTimeout(() => setClaimToast(''), 2500);
+                          }
+                        }}
+                        className="px-4 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider rounded-lg bg-cyber-red/10 border border-cyber-red/40 text-cyber-red/70 hover:bg-cyber-red/20 hover:text-cyber-red transition-all"
+                      >
+                        {t.common.withdraw}
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              {/* Row 2: Capital + Claimable Profit (claim always visible) */}
+              <div className="flex items-center justify-between mt-3 pt-3 border-t border-terminal-border">
+                <div className="flex items-center gap-4 text-xs font-mono">
+                  <div>
+                    <span className="text-gray-600 text-[10px]">{t.agent.capital}</span>
+                    <p className="text-cyber-purple font-bold">{formatUsd(displayCapital)}</p>
+                  </div>
+                  <div className="w-px h-6 bg-terminal-border" />
+                  <div className="flex items-center gap-2">
+                    <div>
+                      <span className="text-gray-600 text-[10px]">{t.agent.claimableProfit}</span>
+                      <p className={`font-bold ${displayClaimable > 0 ? 'text-cyber-green' : 'text-gray-400'}`}>
+                        {displayClaimable > 0 ? '+' : ''}{formatUsd(displayClaimable)}
+                      </p>
+                    </div>
+                    {!isDead && (
+                      <button
+                        onClick={async () => {
+                          if (displayClaimable <= 0) return;
+                          setClaimLoading(true);
+                          try {
+                            const res = await fetch(`/api/agent/${agent.id}/claim`, { method: 'POST' });
+                            const data = await res.json();
+                            if (data.success) {
+                              fireGoldConfetti();
+                              setClaimToast(`Profits Claimed! +$${data.data.claimed.toFixed(2)} USDC`);
+                              refetchAgent();
+                            } else {
+                              setClaimToast(data.error || 'Claim failed');
+                            }
+                          } catch {
+                            setClaimToast('Claim failed');
+                          }
+                          setClaimLoading(false);
+                          setTimeout(() => setClaimToast(''), 4000);
+                        }}
+                        disabled={claimLoading || displayClaimable <= 0}
+                        className={`px-2.5 py-1 text-[9px] font-mono font-bold uppercase tracking-wider rounded-lg transition-all disabled:opacity-30 ${
+                          displayClaimable > 0
+                            ? 'bg-cyber-gold/15 border border-cyber-gold/50 text-cyber-gold hover:bg-cyber-gold/25 shadow-[0_0_8px_rgba(255,215,0,0.15)]'
+                            : 'bg-gray-800/50 border border-gray-700 text-gray-600'
+                        }`}
+                      >
+                        {claimLoading ? '...' : t.agent.claimProfit}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </NeonBorder>
+        </div>
+
+        {/* ════════ SECTION 1: Agent Status — Fuel + Metrics (collapsible) ════════ */}
         <details className={`group ${isDead ? 'opacity-40 grayscale' : ''}`} open>
-          <summary className="text-sm font-mono text-gray-400 uppercase tracking-wider cursor-pointer hover:text-cyber-green transition-colors select-none list-none">
+          <summary className="text-sm font-mono text-gray-400 uppercase tracking-wider cursor-pointer hover:text-cyber-green transition-colors select-none list-none mb-3">
             <span className="text-cyber-green/60">{'// '}</span>
             <span className="group-open:hidden">[+]</span>
             <span className="hidden group-open:inline">[-]</span>
-            {' '}{t.agent.viewStrategy}
+            {' '}{t.agent.sectionStatus}
           </summary>
-          <div className="relative mt-2">
-            <Card>
-              {editingStrategy ? (
-                /* ── Chat-style Strategy Editor (creator only) ── */
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-mono text-gray-600 uppercase">{t.agent.editStrategy}</span>
-                    <button
-                      onClick={() => setEditingStrategy(false)}
-                      className="text-[9px] font-mono text-gray-500 hover:text-gray-300"
-                    >
-                      [X]
-                    </button>
-                  </div>
-
-                  {/* Current strategy summary */}
-                  <div className="bg-terminal-bg rounded p-2 text-[10px] font-mono text-gray-500">
-                    {t.agent.direction} <span className="text-cyber-blue">{agent.parsed_rules.direction_bias}</span>
-                    {' | '}{t.agent.leverage} <span className="text-cyber-gold">{agent.parsed_rules.risk_management.max_leverage}x</span>
-                    {' | '}{t.agent.stopLoss} <span className="text-cyber-red">{agent.parsed_rules.risk_management.stop_loss_pct}%</span>
-                    {' | '}{t.agent.takeProfit} <span className="text-cyber-green">{agent.parsed_rules.risk_management.take_profit_pct}%</span>
-                  </div>
-
-                  {/* AI welcome message */}
-                  <div className="bg-cyber-darker border border-terminal-border rounded-lg p-3 text-xs font-mono text-gray-300">
-                    <span className="text-cyber-green text-[10px]">AI {'>'}</span>{' '}
-                    {t.agent.chatEditWelcome}
-                  </div>
-
-                  {/* Editable parameter preview */}
-                  <div className="bg-cyber-darker border border-cyber-blue/20 rounded-lg p-3 space-y-2 text-xs font-mono">
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-600 w-16">{t.agent.direction}</span>
-                      <div className="flex gap-1 flex-1">
-                        {(['long', 'short', 'both'] as const).map((d) => (
-                          <button
-                            key={d}
-                            onClick={() => setEditDirection(d)}
-                            className={`flex-1 py-1 text-[10px] font-mono uppercase rounded border transition-colors ${
-                              editDirection === d
-                                ? 'border-cyber-blue text-cyber-blue bg-cyber-blue/10'
-                                : 'border-terminal-border text-gray-600 hover:border-gray-500'
-                            }`}
-                          >
-                            {d}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-gray-600 w-16">{t.agent.keywords}</span>
-                      <input
-                        value={editKeywords}
-                        onChange={(e) => setEditKeywords(e.target.value)}
-                        className="flex-1 bg-cyber-darker border border-terminal-border rounded px-2 py-1 font-mono text-xs text-gray-200 focus:border-cyber-blue/50 outline-none"
-                      />
-                    </div>
-                    <div className="grid grid-cols-3 gap-2">
-                      <div className="flex items-center gap-1">
-                        <span className="text-gray-600 text-[10px]">{t.agent.leverage}</span>
-                        <input type="number" min={1} max={50} value={editLeverage} onChange={(e) => setEditLeverage(Number(e.target.value))}
-                          className="w-full bg-cyber-darker border border-terminal-border rounded px-2 py-1 font-mono text-xs text-gray-200 focus:border-cyber-blue/50 outline-none" />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-gray-600 text-[10px]">SL%</span>
-                        <input type="number" min={1} max={50} value={editStopLoss} onChange={(e) => setEditStopLoss(Number(e.target.value))}
-                          className="w-full bg-cyber-darker border border-terminal-border rounded px-2 py-1 font-mono text-xs text-gray-200 focus:border-cyber-blue/50 outline-none" />
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <span className="text-gray-600 text-[10px]">TP%</span>
-                        <input type="number" min={1} max={100} value={editTakeProfit} onChange={(e) => setEditTakeProfit(Number(e.target.value))}
-                          className="w-full bg-cyber-darker border border-terminal-border rounded px-2 py-1 font-mono text-xs text-gray-200 focus:border-cyber-blue/50 outline-none" />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Chat input + save */}
-                  <div className="flex gap-2">
-                    <input
-                      placeholder={t.agent.chatEditPlaceholder}
-                      className="flex-1 bg-cyber-darker border border-terminal-border rounded px-3 py-2 font-mono text-xs text-gray-200 placeholder:text-gray-600 focus:border-cyber-green/50 outline-none"
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          const val = (e.target as HTMLInputElement).value.toLowerCase();
-                          // Simple keyword-based AI parsing
-                          if (val.includes('long') || val.includes('做多') || val.includes('多头')) setEditDirection('long');
-                          if (val.includes('short') || val.includes('做空') || val.includes('空头')) setEditDirection('short');
-                          if (val.includes('both') || val.includes('双向')) setEditDirection('both');
-                          const levMatch = val.match(/(\d+)\s*[xX倍]/);
-                          if (levMatch) setEditLeverage(Number(levMatch[1]));
-                          const slMatch = val.match(/止损\s*(\d+)|stop.?loss\s*(\d+)|sl\s*(\d+)/i);
-                          if (slMatch) setEditStopLoss(Number(slMatch[1] || slMatch[2] || slMatch[3]));
-                          const tpMatch = val.match(/止盈\s*(\d+)|take.?profit\s*(\d+)|tp\s*(\d+)/i);
-                          if (tpMatch) setEditTakeProfit(Number(tpMatch[1] || tpMatch[2] || tpMatch[3]));
-                          (e.target as HTMLInputElement).value = '';
-                        }
-                      }}
-                    />
-                    <button
-                      onClick={saveStrategy}
-                      disabled={savingStrategy}
-                      className="px-4 py-2 text-[10px] font-mono font-bold uppercase rounded bg-cyber-green/15 border border-cyber-green/60 text-cyber-green hover:bg-cyber-green/25 transition-all disabled:opacity-30"
-                    >
-                      {savingStrategy ? t.agent.saving : t.agent.chatEditApply}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* ── Read-only Strategy View + Clone for non-creators ── */
-                <>
-                  <div className="space-y-2 text-xs font-mono">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <span className="text-gray-600">{t.agent.direction}</span>{' '}
-                        <span className="text-cyber-blue">{agent.parsed_rules.direction_bias}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {/* Creator: Edit Strategy button */}
-                        {!isDead && isCreator && (
-                          <button
-                            onClick={startEditStrategy}
-                            className="px-2.5 py-1 text-[8px] font-mono font-bold uppercase tracking-wider rounded bg-cyber-blue/15 border border-cyber-blue/50 text-cyber-blue hover:bg-cyber-blue/25 transition-all"
-                          >
-                            {t.agent.editStrategy}
-                          </button>
-                        )}
-                        {/* Non-creator: Clone button */}
-                        {!isDead && !isCreator && (
-                          <button
-                            onClick={() => router.push(`/agent/new?clone=${agent.id}`)}
-                            className="px-2.5 py-1 text-[8px] font-mono font-bold uppercase tracking-wider rounded transition-all border border-cyber-blue/50 text-cyber-blue hover:bg-cyber-blue/10 shadow-[0_0_8px_rgba(0,200,255,0.2)] hover:shadow-[0_0_16px_rgba(0,200,255,0.4)]"
-                          >
-                            {t.common.clone}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">{t.agent.keywords}:</span>{' '}
-                      <span className="text-cyber-green">{agent.parsed_rules.keywords.join(', ')}</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">{t.agent.leverage}:</span>{' '}
-                      <span className="text-cyber-gold">{agent.parsed_rules.risk_management.max_leverage}x</span>
-                    </div>
-                    <div>
-                      <span className="text-gray-600">{t.agent.stopLoss}:</span>{' '}
-                      <span className="text-cyber-red">{agent.parsed_rules.risk_management.stop_loss_pct}%</span>
-                      <span className="text-gray-700 mx-1.5">|</span>
-                      <span className="text-gray-600">{t.agent.takeProfit}:</span>{' '}
-                      <span className="text-cyber-green">{agent.parsed_rules.risk_management.take_profit_pct}%</span>
-                    </div>
-                  </div>
-                  {tierConfig && (
-                    <div className="mt-3 pt-3 border-t border-terminal-border">
-                      <div className="flex items-center justify-between mb-2">
-                        <p className="text-[10px] font-mono text-gray-600 uppercase">{t.agent.package}</p>
-                        {!isDead && isCreator && canUpgrade(agentTier) && (
-                          <button
-                            onClick={() => setShowUpgradeModal(true)}
-                            className="px-2 py-0.5 text-[8px] font-mono font-bold uppercase tracking-wider rounded border border-cyber-gold/50 text-cyber-gold hover:bg-cyber-gold/10 transition-colors animate-pulse"
-                          >
-                            {t.agent.upgradeTier}
-                          </button>
-                        )}
-                      </div>
-                      <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                        <div>
-                          <span className="text-gray-600">{t.agent.tier}</span>{' '}
-                          <span className="text-cyber-green">{tierConfig.icon} {tierConfig.name}</span>
-                        </div>
-                        <div>
-                          <span className="text-gray-600">{t.agent.ai}</span>{' '}
-                          <span className="text-cyber-blue">{tierConfig.ai_label}</span>
-                        </div>
-                        <div>
-                          <span className="text-gray-600">{t.agent.compute}</span>{' '}
-                          <span className="text-gray-300">{tierConfig.compute}</span>
-                        </div>
-                        <div>
-                          <span className="text-gray-600">{t.agent.frequency}</span>{' '}
-                          <span className="text-gray-300">{tierConfig.frequency_label}</span>
-                        </div>
-                      </div>
-                      <div className="mt-2 text-xs font-mono">
-                        <span className="text-gray-600">{t.agent.dataFeeds}</span>{' '}
-                        <span className="text-cyber-gold">{tierConfig.data_feeds.join(', ')}</span>
-                      </div>
-                      <div className="mt-3 pt-3 border-t border-terminal-border">
-                        <p className="text-[10px] font-mono text-gray-500">
-                          {t.agent.revenueSplit}
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </Card>
-            <MosaicOverlay isLocked={false} />
-          </div>
-        </details>
+          <div className="space-y-4">
 
         {/* Full-width Fuel Bar */}
-        <Card className={isDead ? 'opacity-40 grayscale' : ''}>
+        <Card>
           <div className="flex justify-between items-center text-xs font-mono mb-1">
             <span className="text-gray-500 uppercase">{t.agent.fuel}</span>
             <div className="flex items-center gap-2">
@@ -556,7 +634,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               )}
             </div>
           </div>
-          <div className="w-full h-3 bg-gray-800 rounded-full">
+          <div className="w-full h-2 bg-gray-800 rounded-full">
             <div
               className={`h-full rounded-full transition-all duration-500 ${
                 isDead ? 'bg-gray-600' :
@@ -569,12 +647,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           <div className="flex justify-between items-center text-[10px] font-mono text-gray-600 mt-1">
             <div className="flex items-center gap-2">
               <span>{t.agent.burnPerDay} {formatFuel(burnRate * 24)}{t.agent.perDay}</span>
-              {!isDead && isCreator && canUpgrade(agentTier) && (
+              {!isDead && isCreator && (
                 <button
-                  onClick={() => setShowUpgradeModal(true)}
+                  onClick={() => router.push(`/agent/new?reconfigure=${agent.id}`)}
                   className="px-2.5 py-1 text-[8px] font-mono font-bold uppercase rounded bg-cyber-gold/20 border border-cyber-gold/60 text-cyber-gold hover:bg-cyber-gold/30 transition-all shadow-[0_0_8px_rgba(255,215,0,0.15)]"
                 >
-                  {t.agent.upgrade}
+                  {t.agent.reconfigure}
                 </button>
               )}
               {!isDead && (
@@ -616,34 +694,54 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         </Card>
 
         {/* Core Metrics Grid */}
-        <div className={`grid grid-cols-2 md:grid-cols-4 gap-3 ${isDead ? 'opacity-40 grayscale' : ''}`}>
-          <Card>
-            <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.totalPnl}</p>
-            <p className={`text-lg font-bold font-mono mt-1 ${Number(agent.total_pnl) >= 0 ? 'text-cyber-green' : 'text-cyber-red'}`}>
-              {formatPnl(Number(agent.total_pnl))}
-            </p>
-            <p className="text-[10px] font-mono text-gray-500 mt-0.5">
-              {capital > 0 ? `${Number(agent.total_pnl) >= 0 ? '+' : ''}${((Number(agent.total_pnl) / capital) * 100).toFixed(1)}% ${t.agent.returnLabel}` : '—'}
-            </p>
-          </Card>
-          <Card>
-            <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.winRate}</p>
-            <p className="text-lg font-bold font-mono text-cyber-blue mt-1">
-              {Number(agent.win_rate).toFixed(0)}%
-            </p>
-            <p className="text-[10px] font-mono text-gray-500 mt-0.5">
-              {agent.total_trades} {t.agent.totalTrades}
-            </p>
-          </Card>
-          <Card>
-            <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.aumTvl}</p>
-            <p className="text-lg font-bold font-mono text-cyber-gold mt-1">
-              {formatUsd(capital)}
-            </p>
-            <p className="text-[10px] font-mono text-gray-500 mt-0.5">
-              {t.agent.totalLiquidity}
-            </p>
-          </Card>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          {(() => {
+            const unrealizedPnl = liveData?.totalUnrealizedPnl ?? 0;
+            const realizedPnl = Number(agent.total_pnl);
+            const combinedPnl = realizedPnl + unrealizedPnl;
+            const effectiveCapital = capital + unrealizedPnl;
+            return (
+              <>
+                <Card>
+                  <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.totalPnl}</p>
+                  <p className={`text-lg font-bold font-mono mt-1 ${combinedPnl >= 0 ? 'text-cyber-green' : 'text-cyber-red'}`}>
+                    {formatPnl(combinedPnl)}
+                  </p>
+                  <p className="text-[10px] font-mono text-gray-500 mt-0.5">
+                    {capital > 0 ? `${combinedPnl >= 0 ? '+' : ''}${((combinedPnl / capital) * 100).toFixed(1)}% ${t.agent.returnLabel}` : '\u2014'}
+                  </p>
+                  {unrealizedPnl !== 0 && (
+                    <p className={`text-[9px] font-mono mt-0.5 ${unrealizedPnl >= 0 ? 'text-cyber-green/70' : 'text-cyber-red/70'}`}>
+                      ({unrealizedPnl >= 0 ? '+' : ''}{formatPnl(unrealizedPnl)} unrealized)
+                    </p>
+                  )}
+                </Card>
+                <Card>
+                  <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.winRate}</p>
+                  <p className="text-lg font-bold font-mono text-cyber-blue mt-1">
+                    {Number(agent.win_rate).toFixed(0)}%
+                  </p>
+                  <p className="text-[10px] font-mono text-gray-500 mt-0.5">
+                    {agent.total_trades} {t.agent.totalTrades}
+                  </p>
+                </Card>
+                <Card>
+                  <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.aumTvl}</p>
+                  <p className="text-lg font-bold font-mono text-cyber-gold mt-1">
+                    {formatUsd(effectiveCapital)}
+                  </p>
+                  <p className="text-[10px] font-mono text-gray-500 mt-0.5">
+                    {t.agent.totalLiquidity}
+                  </p>
+                  {unrealizedPnl !== 0 && (
+                    <p className={`text-[9px] font-mono mt-0.5 ${unrealizedPnl >= 0 ? 'text-cyber-green/70' : 'text-cyber-red/70'}`}>
+                      ({unrealizedPnl >= 0 ? '+' : ''}{formatPnl(unrealizedPnl)})
+                    </p>
+                  )}
+                </Card>
+              </>
+            );
+          })()}
           <Card>
             <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.uptime}</p>
             <p className="text-lg font-bold font-mono text-gray-200 mt-1">
@@ -660,89 +758,283 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           </Card>
         </div>
 
-        {/* YOUR POSITION — Unified Card */}
-        <div className={isDead ? 'opacity-40 grayscale' : ''}>
-          <NeonBorder color="purple" animate={false}>
-            <Card>
-              <div className="flex items-center gap-2 mb-3">
-                <span className="text-lg">🏦</span>
-                <h3 className="text-sm font-mono text-gray-300 uppercase tracking-wider font-bold">
-                  {t.agent.yourPosition}
-                </h3>
-              </div>
+          </div>{/* end section 1 content */}
+        </details>
 
-              {/* Big combined total */}
-              <p className="text-2xl font-bold font-mono text-gray-200">
-                {formatUsd(totalPosition)}
-                <span className="text-xs text-gray-500 font-normal ml-2">USDC</span>
-              </p>
+        {/* ════════ SECTION 2: Agent Strategy (collapsible) ════════ */}
+        <details className={`group ${isDead ? 'opacity-40 grayscale' : ''}`}>
+          <summary className="text-sm font-mono text-gray-400 uppercase tracking-wider cursor-pointer hover:text-cyber-green transition-colors select-none list-none mb-3">
+            <span className="text-cyber-green/60">{'// '}</span>
+            <span className="group-open:hidden">[+]</span>
+            <span className="hidden group-open:inline">[-]</span>
+            {' '}{t.agent.sectionAiStrategy}
+            {analysisLoading && <span className="ml-2 text-[10px] text-cyber-blue animate-pulse">analyzing...</span>}
+          </summary>
+          <div className="space-y-4">
 
-              {/* Breakdown: capital + claimable with inline claim button */}
-              <div className="flex items-center gap-3 mt-2 text-[10px] font-mono text-gray-500">
-                <span>{t.agent.capital} <span className="text-cyber-purple">{formatUsd(displayCapital)}</span></span>
-                <span className="text-gray-700">|</span>
-                <span className="flex items-center gap-1.5">
-                  {t.agent.claimableProfit} <span className="text-cyber-green">{formatUsd(displayClaimable)}</span>
-                  {!isDead && isCreator && Number(agent.creator_earnings ?? 0) > 0 && (
-                    <button
-                      onClick={async () => {
-                        setClaimLoading(true);
-                        try {
-                          const res = await fetch(`/api/agent/${agent.id}/claim`, { method: 'POST' });
-                          const data = await res.json();
-                          if (data.success) {
-                            fireGoldConfetti();
-                            setClaimToast(`Profits Claimed! +$${data.data.claimed.toFixed(2)} USDC`);
-                            refetchAgent();
-                          } else {
-                            setClaimToast(data.error || 'Claim failed');
-                          }
-                        } catch {
-                          setClaimToast('Claim failed');
-                        }
-                        setClaimLoading(false);
-                        setTimeout(() => setClaimToast(''), 4000);
-                      }}
-                      disabled={claimLoading}
-                      className="px-2 py-0.5 text-[9px] font-mono font-bold uppercase tracking-wider rounded border border-cyber-gold/50 text-cyber-gold bg-cyber-gold/10 hover:bg-cyber-gold/20 transition-all disabled:opacity-40"
-                    >
-                      {claimLoading ? '...' : t.agent.claimProfit}
-                    </button>
-                  )}
-                </span>
-              </div>
-
-              {/* Deposit / Withdraw — large buttons */}
-              {!isDead && (
-                <div className="flex gap-3 mt-5">
-                  <button
-                    onClick={() => setShowInvestModal(true)}
-                    className="flex-1 py-3 text-sm font-mono font-bold uppercase tracking-wider rounded-lg bg-cyber-green/15 border border-cyber-green/60 text-cyber-green hover:bg-cyber-green/25 transition-all shadow-[0_0_12px_rgba(0,255,65,0.2)]"
-                  >
-                    {t.common.deposit}
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (isCreator) {
-                        setCreatorWithdrawAmount(Math.min(capital, Math.floor(capital)));
-                        setShowCreatorWithdraw(true);
-                      } else if (myInvestment) {
-                        setShowWithdrawModal(true);
-                      } else {
-                        setClaimToast(t.agent.noPosition);
-                        setTimeout(() => setClaimToast(''), 2500);
-                      }
-                    }}
-                    className="flex-1 py-3 text-sm font-mono font-bold uppercase tracking-wider rounded-lg bg-cyber-red/10 border border-cyber-red/50 text-cyber-red hover:bg-cyber-red/20 transition-all shadow-[0_0_12px_rgba(255,50,50,0.15)]"
-                  >
-                    {t.common.withdraw}
-                  </button>
-                </div>
+        {/* ── Strategy Prompt ── */}
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.strategyPrompt}</p>
+            <div className="flex items-center gap-2">
+              {!isDead && isCreator && (
+                <button
+                  onClick={() => router.push(`/agent/new?reconfigure=${agent.id}`)}
+                  className="px-2.5 py-1 text-[8px] font-mono font-bold uppercase tracking-wider rounded bg-cyber-blue/15 border border-cyber-blue/50 text-cyber-blue hover:bg-cyber-blue/25 transition-all"
+                >
+                  {t.agent.editStrategy}
+                </button>
               )}
-            </Card>
-          </NeonBorder>
-        </div>
+              <button
+                onClick={() => setShowVersionHistory(true)}
+                className="px-2.5 py-1 text-[8px] font-mono font-bold uppercase tracking-wider rounded border border-gray-500 text-gray-400 hover:border-gray-300 hover:text-gray-300 transition-all"
+              >
+                {'\uD83D\uDCDC'} {t.agent.versionHistory}
+              </button>
+              {!isDead && !isCreator && (
+                <button
+                  onClick={() => router.push(`/agent/new?clone=${agent.id}`)}
+                  className="px-2.5 py-1 text-[8px] font-mono font-bold uppercase tracking-wider rounded transition-all border border-cyber-blue/50 text-cyber-blue hover:bg-cyber-blue/10 shadow-[0_0_8px_rgba(0,200,255,0.2)] hover:shadow-[0_0_16px_rgba(0,200,255,0.4)]"
+                >
+                  {t.common.clone}
+                </button>
+              )}
+            </div>
+          </div>
+          <div className="bg-terminal-bg rounded-lg p-4 border border-terminal-border">
+            <p className="text-sm font-mono text-cyber-green leading-relaxed whitespace-pre-wrap">{agent.prompt}</p>
+          </div>
+          <div className="flex flex-wrap gap-3 mt-3 text-[10px] font-mono">
+            <span className="text-gray-600">{t.agent.direction} <span className="text-cyber-blue">{agent.parsed_rules.direction_bias}</span></span>
+            <span className="text-gray-700">|</span>
+            <span className="text-gray-600">{t.agent.leverage} <span className="text-cyber-gold">{agent.parsed_rules.risk_management.max_leverage}x</span></span>
+            <span className="text-gray-700">|</span>
+            <span className="text-gray-600">SL <span className="text-cyber-red">{agent.parsed_rules.risk_management.stop_loss_pct}%</span></span>
+            <span className="text-gray-700">|</span>
+            <span className="text-gray-600">TP <span className="text-cyber-green">{agent.parsed_rules.risk_management.take_profit_pct}%</span></span>
+            <span className="text-gray-700">|</span>
+            <span className="text-gray-600">{t.agent.keywords} <span className="text-gray-400">{agent.parsed_rules.keywords.slice(0, 5).join(', ')}</span></span>
+          </div>
+        </Card>
 
+        {/* ── Latest AI Analysis ── */}
+        <Card>
+          <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider mb-3">{t.agent.latestAnalysis}</p>
+          {(() => {
+            const analysis = manualAnalysis ?? liveData?.analysis ?? null;
+            if (!analysis) return (
+              <p className="text-xs font-mono text-gray-600 py-4 text-center">
+                {analysisLoading ? 'AI web search + analysis in progress...' : t.agent.noAnalysisYet}
+              </p>
+            );
+            return (
+              <div className="space-y-3">
+                <div className={`flex items-center justify-between p-3 rounded-lg border ${
+                  analysis.shouldTrade
+                    ? 'border-cyber-green/30 bg-cyber-green/5'
+                    : 'border-gray-700 bg-gray-800/30'
+                }`}>
+                  <span className={`text-lg font-mono font-bold ${analysis.shouldTrade ? 'text-cyber-green' : 'text-gray-500'}`}>
+                    {analysis.shouldTrade ? `${t.agent.signal}: ${analysis.direction.toUpperCase()}` : t.agent.hold}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] font-mono text-gray-500">{t.agent.confidence}</span>
+                    <span className={`text-sm font-mono font-bold ${
+                      analysis.confidence >= 80 ? 'text-cyber-green' :
+                      analysis.confidence >= 60 ? 'text-cyber-blue' :
+                      'text-gray-400'
+                    }`}>
+                      {analysis.confidence}%
+                    </span>
+                  </div>
+                </div>
+                {analysis.reason && (
+                  <p className="text-xs font-mono text-gray-300 leading-relaxed">{analysis.reason}</p>
+                )}
+                {analysis.matchedHeadlines && analysis.matchedHeadlines.length > 0 && (
+                  <div>
+                    <p className="text-[9px] font-mono text-gray-600 uppercase mb-1.5">{t.agent.webSearchResults}</p>
+                    <div className="space-y-1">
+                      {analysis.matchedHeadlines.slice(0, 5).map((headline, i) => (
+                        <div key={i} className="flex items-start gap-2 text-[10px] font-mono">
+                          <span className="text-cyber-blue shrink-0">{'\u25B8'}</span>
+                          <span className="text-gray-400">{headline}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {analysis.technicalSummary && (
+                  <div className="bg-terminal-bg rounded p-2.5 text-[10px] font-mono text-gray-500 leading-relaxed">
+                    <span className="text-gray-600 uppercase text-[9px]">{t.agent.technicalAnalysis}:</span>{' '}
+                    {analysis.technicalSummary}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </Card>
+
+        {/* ── Package & Revenue Split ── */}
+        <Card>
+          {tierConfig && (
+            <>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-[10px] font-mono text-gray-600 uppercase tracking-wider">{t.agent.package}</p>
+                {!isDead && isCreator && (
+                  <button
+                    onClick={() => router.push(`/agent/new?reconfigure=${agent.id}`)}
+                    className="px-2.5 py-1 text-[8px] font-mono font-bold uppercase tracking-wider rounded bg-cyber-gold/15 border border-cyber-gold/50 text-cyber-gold hover:bg-cyber-gold/25 transition-all"
+                  >
+                    {t.agent.reconfigure}
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+                <div><span className="text-gray-600">{t.agent.tier}</span> <span className="text-cyber-green">{tierConfig.icon} {tierConfig.name}</span></div>
+                <div><span className="text-gray-600">{t.agent.ai}</span> <span className="text-cyber-blue">{tierConfig.ai_label}</span></div>
+                <div><span className="text-gray-600">{t.agent.compute}</span> <span className="text-gray-300">{tierConfig.compute}</span></div>
+                <div><span className="text-gray-600">{t.agent.frequency}</span> <span className="text-gray-300">{tierConfig.frequency_label}</span></div>
+              </div>
+              <div className="mt-2 text-xs font-mono">
+                <span className="text-gray-600">{t.agent.dataFeeds}</span>{' '}
+                <span className="text-cyber-gold">{(agent.parsed_rules.data_sources ?? ['hl_kline', 'ai_web_search']).join(', ')}</span>
+              </div>
+              {(() => {
+                const split = agent.parsed_rules.revenue_split ?? { lp_pct: 80, agent_pct: 10, creator_pct: 10 };
+                return (
+                  <div className="mt-2 pt-2 border-t border-terminal-border text-[10px] font-mono text-gray-600">
+                    <span className="text-cyber-green">{split.lp_pct}%</span> {t.agent.feePool}
+                    <span className="text-gray-700 mx-1">{'\u00B7'}</span>
+                    <span className="text-cyber-gold">{split.agent_pct}%</span> {t.agent.feeTreasury}
+                    <span className="text-gray-700 mx-1">{'\u00B7'}</span>
+                    <span className="text-cyber-purple">{split.creator_pct}%</span> {t.agent.feeCreator}
+                  </div>
+                );
+              })()}
+            </>
+          )}
+        </Card>
+
+          </div>{/* end section 2 content */}
+        </details>
+
+        {/* ════════ SECTION 3: Trading (collapsible) ════════ */}
+        <details className={`group ${isDead ? 'opacity-40 grayscale' : ''}`} open>
+          <summary className="text-sm font-mono text-gray-400 uppercase tracking-wider cursor-pointer hover:text-cyber-green transition-colors select-none list-none mb-3">
+            <span className="text-cyber-green/60">{'// '}</span>
+            <span className="group-open:hidden">[+]</span>
+            <span className="hidden group-open:inline">[-]</span>
+            {' '}{t.agent.sectionTrading}
+          </summary>
+          <div className="space-y-4">
+
+        {/* Open Positions — Live Unrealized P&L (always visible) */}
+        {!isDead && (
+          <div>
+            <h3 className="text-sm font-mono text-gray-400 uppercase tracking-wider mb-3">
+              <span className="text-cyber-green/60">{'// '}</span>
+              {t.agent.openPositions} {liveData && liveData.openPositions.length > 0 ? `(${liveData.openPositions.length})` : ''}
+            </h3>
+            {liveData && liveData.openPositions.length > 0 ? (
+              <div className="space-y-2">
+                {liveData.openPositions.map((pos) => {
+                  const posTriggerData = pos.triggerData as Record<string, unknown> | null | undefined;
+                  const posConfidence = posTriggerData?.confidence as number | undefined;
+                  const posHeadlines = posTriggerData?.matchedHeadlines as string[] | undefined;
+                  const posTechSummary = posTriggerData?.technicalSummary as string | undefined;
+                  const posDataSources = posTriggerData?.dataSources as string[] | undefined;
+                  const cleanPosReason = pos.triggerReason?.replace(/^\[AI \d+%\]\s*/, '') ?? '';
+
+                  const posSourceInfo = (posDataSources ?? ['hl_kline', 'ai_web_search']).map((dsId) => {
+                    const ds = DATA_SOURCES.find((d) => d.id === dsId);
+                    return ds ? { icon: ds.icon, name: ds.name } : { icon: '\uD83D\uDCE1', name: dsId };
+                  });
+
+                  return (
+                    <Card key={pos.id}>
+                      {/* Header row */}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Badge variant={pos.direction === 'long' ? 'green' : 'red'}>
+                            {pos.direction}
+                          </Badge>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <p className="text-xs font-mono text-gray-300">{pos.symbol.replace('xyz:', '')} <span className="text-gray-600">{pos.leverage}x</span></p>
+                              {posConfidence != null && (
+                                <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                                  posConfidence >= 85 ? 'bg-cyber-green/20 text-cyber-green' :
+                                  posConfidence >= 70 ? 'bg-cyber-blue/20 text-cyber-blue' :
+                                  'bg-gray-700 text-gray-400'
+                                }`}>
+                                  AI {posConfidence}%
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[10px] font-mono text-gray-600">
+                              {t.agent.entry} ${pos.entryPrice.toFixed(2)} {'\u2192'} {t.agent.now} ${pos.currentPrice.toFixed(2)}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className={`text-sm font-mono font-bold ${pos.unrealizedPnl >= 0 ? 'text-cyber-green' : 'text-cyber-red'}`}>
+                            {pos.unrealizedPnl >= 0 ? '+' : ''}{formatPnl(pos.unrealizedPnl)}
+                          </p>
+                          <p className={`text-[10px] font-mono ${pos.pnlPct >= 0 ? 'text-cyber-green/70' : 'text-cyber-red/70'}`}>
+                            {pos.pnlPct >= 0 ? '+' : ''}{pos.pnlPct.toFixed(2)}%
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* AI Decision Summary for open position */}
+                      <div className="mt-2 space-y-2">
+                        {/* Data sources tags */}
+                        <div className="flex flex-wrap gap-1">
+                          {posSourceInfo.map((src, i) => (
+                            <span key={i} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-gray-800/60 border border-terminal-border text-[8px] font-mono text-gray-500">
+                              <span>{src.icon}</span> {src.name}
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* AI reasoning */}
+                        {cleanPosReason && (
+                          <div className="bg-terminal-bg rounded p-2 border-l-2 border-cyber-blue/30">
+                            <p className="text-[9px] font-mono text-cyber-blue uppercase mb-0.5">{t.agent.whyThisTrade}</p>
+                            <p className="text-[10px] font-mono text-gray-300 leading-relaxed">{cleanPosReason}</p>
+                          </div>
+                        )}
+
+                        {/* Technical summary (collapsed) */}
+                        {posTechSummary && (
+                          <p className="text-[9px] font-mono text-fuchsia-400/60 leading-relaxed px-2">
+                            {posTechSummary}
+                          </p>
+                        )}
+
+                        {/* News headlines */}
+                        {posHeadlines && posHeadlines.length > 0 && (
+                          <div className="px-2 space-y-0.5">
+                            {posHeadlines.slice(0, 3).map((h, i) => (
+                              <p key={i} className="text-[9px] font-mono text-cyber-gold/60 leading-relaxed">
+                                {i + 1}. {h}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </Card>
+                  );
+                })}
+              </div>
+            ) : (
+              <Card className="text-center py-4">
+                <p className="text-gray-600 font-mono text-xs">{t.agent.noOpenPositions}</p>
+              </Card>
+            )}
+          </div>
+        )}
 
 
         {/* Trade History */}
@@ -760,7 +1052,19 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 const triggerData = trade.trigger_data as Record<string, unknown> | null;
                 const confidence = triggerData?.confidence as number | undefined;
                 const matchedHeadlines = triggerData?.matchedHeadlines as string[] | undefined;
+                const technicalSummary = triggerData?.technicalSummary as string | undefined;
+                const dataSources = triggerData?.dataSources as string[] | undefined;
+                const analyzedAt = triggerData?.analyzedAt as string | undefined;
                 const isExpanded = expandedTrade === trade.id;
+
+                // Map data source IDs to display info
+                const sourceDisplayInfo = (dataSources ?? ['hl_kline', 'ai_web_search']).map((dsId) => {
+                  const ds = DATA_SOURCES.find((d) => d.id === dsId);
+                  return ds ? { icon: ds.icon, name: ds.name } : { icon: '📡', name: dsId };
+                });
+
+                // Strip the "[AI XX%]" prefix from trigger_reason for cleaner display
+                const cleanReason = trade.trigger_reason?.replace(/^\[AI \d+%\]\s*/, '') ?? '';
 
                 return (
                   <motion.div
@@ -772,6 +1076,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       className="cursor-pointer hover:border-cyber-green/20 transition-colors"
                       onClick={() => setExpandedTrade(isExpanded ? null : trade.id)}
                     >
+                      {/* Collapsed row */}
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-3">
                           <Badge variant={trade.direction === 'long' ? 'green' : 'red'}>
@@ -791,7 +1096,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                               )}
                             </div>
                             <p className="text-[10px] font-mono text-gray-600 max-w-[300px] truncate">
-                              {trade.trigger_reason}
+                              {cleanReason}
                             </p>
                           </div>
                         </div>
@@ -810,13 +1115,14 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         </div>
                       </div>
 
-                      {/* Expanded: AI Analysis Details */}
+                      {/* Expanded: Full AI Decision Breakdown */}
                       {isExpanded && (
                         <motion.div
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: 'auto' }}
-                          className="mt-3 pt-3 border-t border-terminal-border space-y-2"
+                          className="mt-3 pt-3 border-t border-terminal-border space-y-3"
                         >
+                          {/* Trade Info Grid */}
                           <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
                             <div>
                               <span className="text-gray-600">{t.agent.entry}</span>
@@ -836,27 +1142,83 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                             </div>
                           </div>
 
-                          {/* AI Reasoning */}
-                          {trade.trigger_reason && (
-                            <div className="bg-terminal-bg rounded p-2">
-                              <p className="text-[9px] font-mono text-cyber-blue uppercase mb-1">{t.agent.aiAnalysis}</p>
-                              <p className="text-[11px] font-mono text-gray-300 leading-relaxed">
-                                {trade.trigger_reason}
+                          {/* Data Sources Used */}
+                          <div className="bg-terminal-bg rounded p-2.5">
+                            <p className="text-[9px] font-mono text-gray-500 uppercase mb-1.5">{t.agent.dataSourcesUsed}</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {sourceDisplayInfo.map((src, i) => (
+                                <span key={i} className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-gray-800/60 border border-terminal-border text-[9px] font-mono text-gray-400">
+                                  <span>{src.icon}</span>
+                                  <span>{src.name}</span>
+                                </span>
+                              ))}
+                            </div>
+                            {analyzedAt && (
+                              <p className="text-[8px] font-mono text-gray-600 mt-1.5">
+                                {t.agent.analyzedAt}: {new Date(analyzedAt).toLocaleString()}
                               </p>
+                            )}
+                          </div>
+
+                          {/* AI Decision Reasoning — the core "why" */}
+                          <div className="bg-terminal-bg rounded p-2.5 border-l-2 border-cyber-blue/50">
+                            <p className="text-[9px] font-mono text-cyber-blue uppercase mb-1.5">{t.agent.whyThisTrade}</p>
+                            <p className="text-[11px] font-mono text-gray-200 leading-relaxed">
+                              {cleanReason}
+                            </p>
+                            {confidence != null && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <div className="flex-1 h-1 bg-gray-800 rounded-full overflow-hidden">
+                                  <div
+                                    className={`h-full rounded-full ${
+                                      confidence >= 85 ? 'bg-cyber-green' :
+                                      confidence >= 70 ? 'bg-cyber-blue' :
+                                      confidence >= 50 ? 'bg-cyber-gold' : 'bg-gray-600'
+                                    }`}
+                                    style={{ width: `${confidence}%` }}
+                                  />
+                                </div>
+                                <span className={`text-[9px] font-mono font-bold ${
+                                  confidence >= 85 ? 'text-cyber-green' :
+                                  confidence >= 70 ? 'text-cyber-blue' :
+                                  confidence >= 50 ? 'text-cyber-gold' : 'text-gray-500'
+                                }`}>
+                                  {t.agent.confidence}: {confidence}%
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Technical Indicators */}
+                          {technicalSummary ? (
+                            <div className="bg-terminal-bg rounded p-2.5 border-l-2 border-fuchsia-500/40">
+                              <p className="text-[9px] font-mono text-fuchsia-400 uppercase mb-1.5">{t.agent.technicalIndicators}</p>
+                              <p className="text-[10px] font-mono text-gray-300 leading-relaxed whitespace-pre-wrap">
+                                {technicalSummary}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="bg-terminal-bg rounded p-2 opacity-50">
+                              <p className="text-[9px] font-mono text-gray-600">{t.agent.noTechnicalData}</p>
                             </div>
                           )}
 
-                          {/* Matched Headlines */}
+                          {/* News & Events */}
                           {matchedHeadlines && matchedHeadlines.length > 0 && (
-                            <div className="bg-terminal-bg rounded p-2">
-                              <p className="text-[9px] font-mono text-cyber-gold uppercase mb-1">
-                                {t.agent.newsTriggers} ({matchedHeadlines.length})
+                            <div className="bg-terminal-bg rounded p-2.5 border-l-2 border-cyber-gold/40">
+                              <p className="text-[9px] font-mono text-cyber-gold uppercase mb-1.5">
+                                {t.agent.newsAndEvents} ({matchedHeadlines.length})
                               </p>
-                              {matchedHeadlines.map((h, i) => (
-                                <p key={i} className="text-[10px] font-mono text-gray-400 leading-relaxed">
-                                  {i + 1}. {h}
-                                </p>
-                              ))}
+                              <div className="space-y-1">
+                                {matchedHeadlines.map((h, i) => (
+                                  <div key={i} className="flex items-start gap-1.5">
+                                    <span className="text-[9px] font-mono text-cyber-gold/60 mt-0.5">{i + 1}.</span>
+                                    <p className="text-[10px] font-mono text-gray-300 leading-relaxed">
+                                      {h}
+                                    </p>
+                                  </div>
+                                ))}
+                              </div>
                             </div>
                           )}
                         </motion.div>
@@ -868,11 +1230,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             </div>
           )}
         </div>
+
+          </div>{/* end section 3 content */}
+        </details>
+
       </div>{/* end LEFT COLUMN */}
 
       {/* ════════ RIGHT COLUMN — Sticky Terminal / Chat ════════ */}
       {!isDead && (
-        <div className="hidden lg:block w-[480px] shrink-0">
+        <div className="hidden lg:block w-[380px] shrink-0">
           <div className="sticky top-8 h-[calc(100vh-4rem)] flex flex-col">
             <NeonBorder color={terminalTab === 'terminal' ? 'green' : 'blue'} className="h-full">
               <Card variant="terminal" className="h-full relative flex flex-col">
@@ -939,7 +1305,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       )}
 
-      {/* ───── Recharge Modal ───── */}
+      {/* ───── Recharge Modal (Dual-Currency: USDC + Points) ───── */}
       {showRecharge && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-cyber-black/80 backdrop-blur-sm">
           <motion.div
@@ -947,10 +1313,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             animate={{ opacity: 1, scale: 1 }}
             className="w-full max-w-md mx-4"
           >
-            <NeonBorder color="green">
+            <NeonBorder color={rechargeTab === 'usdc' ? 'green' : 'purple'}>
               <Card className="relative">
                 <button
-                  onClick={() => { setShowRecharge(false); setRechargeStatus('idle'); setRechargeError(''); }}
+                  onClick={() => { setShowRecharge(false); setRechargeStatus('idle'); setRechargeError(''); setPointsRechargeStatus('idle'); }}
                   className="absolute top-3 right-3 text-gray-500 hover:text-gray-300 font-mono"
                 >
                   [X]
@@ -960,102 +1326,270 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   {t.recharge.title}
                 </h3>
 
-                {/* Wallet USDC Balance */}
-                <div className="flex items-center justify-between mb-4 pb-3 border-b border-terminal-border">
-                  <div>
-                    <p className="text-[10px] font-mono text-gray-600 uppercase">{t.recharge.usdcOnBsc}</p>
-                    <p className="text-sm font-bold text-cyber-gold font-mono">
-                      {balanceLoading ? '...' : formatUsd(usdcBalance)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-1.5 h-1.5 rounded-full ${currentChainId === 56 ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
-                    <span className={`text-[9px] font-mono ${currentChainId === 56 ? 'text-cyber-green' : 'text-cyber-red'}`}>
-                      {currentChainId === 56 ? 'BSC' : t.common.wrongChain}
-                    </span>
-                  </div>
+                {/* Tab toggle */}
+                <div className="flex rounded-lg overflow-hidden border border-terminal-border mb-4">
+                  <button
+                    onClick={() => setRechargeTab('usdc')}
+                    className={`flex-1 py-2 text-xs font-mono font-bold uppercase tracking-wider transition-colors ${
+                      rechargeTab === 'usdc'
+                        ? 'bg-cyber-green/15 text-cyber-green border-r border-terminal-border'
+                        : 'text-gray-500 hover:text-gray-300 border-r border-terminal-border'
+                    }`}
+                  >
+                    {'\uD83E\uDE99'} {t.recharge.tabUsdc}
+                  </button>
+                  <button
+                    onClick={() => setRechargeTab('points')}
+                    className={`flex-1 py-2 text-xs font-mono font-bold uppercase tracking-wider transition-colors ${
+                      rechargeTab === 'points'
+                        ? 'bg-cyber-purple/15 text-cyber-purple'
+                        : 'text-gray-500 hover:text-gray-300'
+                    }`}
+                  >
+                    {'\uD83C\uDF81'} {t.recharge.tabPoints}
+                  </button>
                 </div>
 
-                {rechargeStatus === 'success' ? (
-                  <div className="text-center py-6">
-                    <p className="text-2xl mb-2">⚡</p>
-                    <p className="text-cyber-green font-mono font-bold">{t.recharge.rechargeComplete}</p>
-                    <p className="text-xs font-mono text-gray-500 mt-1">+{formatFuel(rechargePvp)} {t.recharge.fuelAdded}</p>
-                  </div>
-                ) : (
+                {/* ═══ USDC Tab ═══ */}
+                {rechargeTab === 'usdc' && (
                   <>
-                    <div className="space-y-4">
+                    {/* Wallet USDC Balance */}
+                    <div className="flex items-center justify-between mb-4 pb-3 border-b border-terminal-border">
                       <div>
-                        <label className="text-[10px] font-mono text-gray-600 uppercase block mb-1">{t.recharge.amountUsdc}</label>
-                        <input
-                          type="range"
-                          min={METABOLISM.MIN_RECHARGE_USD}
-                          max={500}
-                          step={10}
-                          value={rechargeAmount}
-                          onChange={(e) => setRechargeAmount(Number(e.target.value))}
-                          className="w-full h-2 rounded-lg cursor-pointer appearance-none bg-gray-700 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyber-green [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(0,255,65,0.4)]"
-                          disabled={rechargeStatus !== 'idle'}
-                        />
-                        <div className="flex justify-between text-xs font-mono text-gray-500 mt-1">
-                          <span>${METABOLISM.MIN_RECHARGE_USD}</span>
-                          <span className="text-cyber-gold font-bold">${rechargeAmount}</span>
-                          <span>$500</span>
-                        </div>
+                        <p className="text-[10px] font-mono text-gray-600 uppercase">{t.recharge.usdcOnBsc}</p>
+                        <p className="text-sm font-bold text-cyber-gold font-mono">
+                          {balanceLoading ? '...' : formatUsd(usdcBalance)}
+                        </p>
                       </div>
-
-                      <div className="flex gap-2">
-                        {[10, 20, 50, 100].map((amt) => (
-                          <button
-                            key={amt}
-                            onClick={() => setRechargeAmount(amt)}
-                            disabled={rechargeStatus !== 'idle'}
-                            className={`flex-1 py-1.5 text-xs font-mono border rounded transition-colors ${
-                              rechargeAmount === amt
-                                ? 'border-cyber-green text-cyber-green bg-cyber-green/10'
-                                : 'border-terminal-border text-gray-500 hover:text-cyber-green hover:border-cyber-green/30'
-                            }`}
-                          >
-                            ${amt}
-                          </button>
-                        ))}
-                      </div>
-
-                      <div className="bg-terminal-bg rounded p-3 space-y-1 text-[10px] font-mono">
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">{t.recharge.youPay}</span>
-                          <span className="text-cyber-gold">{formatUsd(rechargeAmount)}</span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-gray-600">{t.recharge.youGet}</span>
-                          <span className="text-fuchsia-400">{formatFuel(rechargePvp)} {t.recharge.fuelUnit}</span>
-                        </div>
-                        <div className="flex justify-between pt-1 border-t border-terminal-border text-xs font-bold">
-                          <span className="text-gray-400">{t.recharge.lifespan}</span>
-                          <span className="text-cyber-green">+{rechargeDaysAdded.toFixed(1)} {t.recharge.days}</span>
-                        </div>
+                      <div className="flex items-center gap-1.5">
+                        <div className={`w-1.5 h-1.5 rounded-full ${currentChainId === 56 ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
+                        <span className={`text-[9px] font-mono ${currentChainId === 56 ? 'text-cyber-green' : 'text-cyber-red'}`}>
+                          {currentChainId === 56 ? 'BSC' : t.common.wrongChain}
+                        </span>
                       </div>
                     </div>
 
-                    {rechargeError && <p className="text-cyber-red font-mono text-xs mt-2">! {rechargeError}</p>}
+                    {rechargeStatus === 'success' ? (
+                      <div className="text-center py-6">
+                        <p className="text-2xl mb-2">{'\u26A1'}</p>
+                        <p className="text-cyber-green font-mono font-bold">{t.recharge.rechargeComplete}</p>
+                        <p className="text-xs font-mono text-gray-500 mt-1">+{formatFuel(rechargePvp)} {t.recharge.fuelAdded}</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="space-y-4">
+                          <div>
+                            <label className="text-[10px] font-mono text-gray-600 uppercase block mb-1">{t.recharge.amountUsdc}</label>
+                            <input
+                              type="range"
+                              min={METABOLISM.MIN_RECHARGE_USD}
+                              max={500}
+                              step={10}
+                              value={rechargeAmount}
+                              onChange={(e) => setRechargeAmount(Number(e.target.value))}
+                              className="w-full h-2 rounded-lg cursor-pointer appearance-none bg-gray-700 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyber-green [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(0,255,65,0.4)]"
+                              disabled={rechargeStatus !== 'idle'}
+                            />
+                            <div className="flex justify-between text-xs font-mono text-gray-500 mt-1">
+                              <span>${METABOLISM.MIN_RECHARGE_USD}</span>
+                              <span className="text-cyber-gold font-bold">${rechargeAmount}</span>
+                              <span>$500</span>
+                            </div>
+                          </div>
 
-                    {!balanceLoading && rechargeAmount > usdcBalance && (
-                      <p className="text-cyber-gold font-mono text-[10px] mt-2">
-                        {t.recharge.walletHas} {formatUsd(usdcBalance)} USDC — {t.recharge.need} {formatUsd(rechargeAmount)}. {t.recharge.walletNeed}
-                      </p>
+                          <div className="flex gap-2">
+                            {[10, 20, 50, 100].map((amt) => (
+                              <button
+                                key={amt}
+                                onClick={() => setRechargeAmount(amt)}
+                                disabled={rechargeStatus !== 'idle'}
+                                className={`flex-1 py-1.5 text-xs font-mono border rounded transition-colors ${
+                                  rechargeAmount === amt
+                                    ? 'border-cyber-green text-cyber-green bg-cyber-green/10'
+                                    : 'border-terminal-border text-gray-500 hover:text-cyber-green hover:border-cyber-green/30'
+                                }`}
+                              >
+                                ${amt}
+                              </button>
+                            ))}
+                          </div>
+
+                          <div className="bg-terminal-bg rounded p-3 space-y-1 text-[10px] font-mono">
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">{t.recharge.youPay}</span>
+                              <span className="text-cyber-gold">{formatUsd(rechargeAmount)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">{t.recharge.youGet}</span>
+                              <span className="text-fuchsia-400">{formatFuel(rechargePvp)} {t.recharge.fuelUnit}</span>
+                            </div>
+                            <div className="flex justify-between pt-1 border-t border-terminal-border text-xs font-bold">
+                              <span className="text-gray-400">{t.recharge.lifespan}</span>
+                              <span className="text-cyber-green">+{rechargeDaysAdded.toFixed(1)} {t.recharge.days}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {rechargeError && <p className="text-cyber-red font-mono text-xs mt-2">! {rechargeError}</p>}
+
+                        {!balanceLoading && rechargeAmount > usdcBalance && (
+                          <p className="text-cyber-gold font-mono text-[10px] mt-2">
+                            {t.recharge.walletHas} {formatUsd(usdcBalance)} USDC — {t.recharge.need} {formatUsd(rechargeAmount)}. {t.recharge.walletNeed}
+                          </p>
+                        )}
+
+                        <Button
+                          variant="primary"
+                          onClick={handleRecharge}
+                          loading={rechargeStatus === 'paying' || rechargeStatus === 'verifying'}
+                          disabled={rechargeStatus !== 'idle' && rechargeStatus !== 'error'}
+                          className="w-full mt-4"
+                        >
+                          {rechargeStatus === 'paying' ? t.recharge.sendingUsdc :
+                           rechargeStatus === 'verifying' ? t.recharge.verifying :
+                           `${t.recharge.rechargeBtn} — ${formatUsd(rechargeAmount)}`}
+                        </Button>
+                      </>
                     )}
+                  </>
+                )}
 
-                    <Button
-                      variant="primary"
-                      onClick={handleRecharge}
-                      loading={rechargeStatus === 'paying' || rechargeStatus === 'verifying'}
-                      disabled={rechargeStatus !== 'idle' && rechargeStatus !== 'error'}
-                      className="w-full mt-4"
-                    >
-                      {rechargeStatus === 'paying' ? t.recharge.sendingUsdc :
-                       rechargeStatus === 'verifying' ? t.recharge.verifying :
-                       `${t.recharge.rechargeBtn} — ${formatUsd(rechargeAmount)}`}
-                    </Button>
+                {/* ═══ Points Tab ═══ */}
+                {rechargeTab === 'points' && (
+                  <>
+                    {/* User points balance */}
+                    <div className="flex items-center justify-between mb-4 pb-3 border-b border-terminal-border">
+                      <div>
+                        <p className="text-[10px] font-mono text-gray-600 uppercase">{t.recharge.myPoints}</p>
+                        <p className="text-sm font-bold text-cyber-purple font-mono">
+                          {user?.pvpai_points ?? 0} {t.recharge.pointsUnit}
+                        </p>
+                      </div>
+                      <div className="text-[9px] font-mono text-cyber-gold bg-cyber-gold/10 border border-cyber-gold/30 rounded px-2 py-1">
+                        {'\uD83D\uDCA1'} {t.recharge.pointsRate}
+                      </div>
+                    </div>
+
+                    {pointsRechargeStatus === 'success' ? (
+                      <div className="text-center py-6">
+                        <p className="text-2xl mb-2">{'\u26A1'}</p>
+                        <p className="text-cyber-purple font-mono font-bold">{t.recharge.pointsSuccess}</p>
+                        <p className="text-xs font-mono text-gray-500 mt-1">
+                          -{pointsAmount} {t.recharge.pointsUnit} {'\u2192'} +${(pointsAmount / 100).toFixed(2)} {t.recharge.fuelUnit}
+                        </p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="space-y-4">
+                          {/* Points quick select */}
+                          <div className="flex gap-2">
+                            {[100, 200, 500, 1000].map((amt) => (
+                              <button
+                                key={amt}
+                                onClick={() => setPointsAmount(amt)}
+                                disabled={pointsRechargeStatus === 'processing'}
+                                className={`flex-1 py-2 text-xs font-mono font-bold border rounded transition-colors ${
+                                  pointsAmount === amt
+                                    ? 'border-cyber-purple text-cyber-purple bg-cyber-purple/10'
+                                    : 'border-terminal-border text-gray-500 hover:text-cyber-purple hover:border-cyber-purple/30'
+                                }`}
+                              >
+                                {amt} {t.recharge.pointsQuickLabel}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* Points slider */}
+                          <input
+                            type="range"
+                            min={100}
+                            max={Math.max(100, user?.pvpai_points ?? 0)}
+                            step={100}
+                            value={pointsAmount}
+                            onChange={(e) => setPointsAmount(Number(e.target.value))}
+                            className="w-full h-2 rounded-lg cursor-pointer appearance-none bg-gray-700 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-cyber-purple [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(191,0,255,0.4)]"
+                            disabled={pointsRechargeStatus === 'processing'}
+                          />
+
+                          {/* Points calculation */}
+                          {(() => {
+                            const fuelUsd = pointsAmount / 100;
+                            const fuelPvp = fuelUsd * METABOLISM.PVP_PER_USD;
+                            const daysAdded = tierConfig ? fuelPvp / tierConfig.pvp_per_day : 0;
+                            return (
+                              <div className="bg-terminal-bg rounded p-3 space-y-1 text-[10px] font-mono">
+                                <div className="flex justify-between">
+                                  <span className="text-gray-600">{t.recharge.youPay}</span>
+                                  <span className="text-cyber-purple">{pointsAmount} {t.recharge.pointsUnit}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                  <span className="text-gray-600">{t.recharge.youGet}</span>
+                                  <span className="text-fuchsia-400">${fuelUsd.toFixed(2)} {t.recharge.fuelUnit} (+{daysAdded.toFixed(1)} {t.recharge.days})</span>
+                                </div>
+                              </div>
+                            );
+                          })()}
+
+                          {pointsAmount > (user?.pvpai_points ?? 0) && (
+                            <p className="text-cyber-red font-mono text-[10px]">! {t.recharge.pointsInsufficient}</p>
+                          )}
+                        </div>
+
+                        {/* Burn Points button */}
+                        <button
+                          onClick={async () => {
+                            if (!agent) return;
+                            setPointsRechargeStatus('processing');
+                            try {
+                              const res = await fetch(`/api/agent/${agent.id}/recharge-points`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ points: pointsAmount }),
+                              });
+                              const result = await res.json();
+                              if (!result.success) {
+                                setPointsRechargeStatus('idle');
+                                return;
+                              }
+                              setPointsRechargeStatus('success');
+                              fireGoldConfetti();
+                              refetchAgent();
+                              setTimeout(() => {
+                                setPointsRechargeStatus('idle');
+                              }, 2000);
+                            } catch {
+                              setPointsRechargeStatus('idle');
+                            }
+                          }}
+                          disabled={pointsRechargeStatus === 'processing' || pointsAmount > (user?.pvpai_points ?? 0) || pointsAmount < 100}
+                          className="w-full mt-4 py-2.5 text-sm font-mono font-bold uppercase tracking-wider rounded-lg bg-cyber-purple/15 border border-cyber-purple/60 text-cyber-purple hover:bg-cyber-purple/25 transition-all disabled:opacity-30 shadow-[0_0_10px_rgba(191,0,255,0.15)]"
+                        >
+                          {pointsRechargeStatus === 'processing'
+                            ? `${t.recharge.verifying}`
+                            : `\u26A1 ${t.recharge.pointsBurnBtn} — ${pointsAmount} pts`}
+                        </button>
+
+                        {/* ─── Viral Referral Hook ─── */}
+                        <div className="mt-4 pt-4 border-t border-terminal-border">
+                          <button
+                            onClick={() => {
+                              const text = t.recharge.viralShareText;
+                              const url = `${window.location.origin}/?ref=${user?.referral_code ?? 'pvpai'}`;
+                              window.open(
+                                `https://x.com/intent/tweet?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}`,
+                                '_blank'
+                              );
+                            }}
+                            className="w-full py-3 text-sm font-mono font-bold uppercase tracking-wider rounded-lg bg-gradient-to-r from-cyber-purple/20 via-fuchsia-500/20 to-cyber-purple/20 border border-fuchsia-500/60 text-fuchsia-400 hover:from-cyber-purple/30 hover:via-fuchsia-500/30 hover:to-cyber-purple/30 transition-all animate-pulse shadow-[0_0_15px_rgba(236,72,153,0.2),0_0_30px_rgba(191,0,255,0.1)]"
+                          >
+                            {'\uD83D\uDE80'} {t.recharge.viralInvite}
+                          </button>
+                          <p className="text-[9px] font-mono text-gray-600 text-center mt-2">
+                            100 {t.recharge.pointsUnit} = $1 {t.recharge.fuelUnit}
+                          </p>
+                        </div>
+                      </>
+                    )}
                   </>
                 )}
               </Card>
@@ -1238,12 +1772,23 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     className="w-full"
                     loading={promoteStatus === 'paying'}
                     onClick={async () => {
+                      if (!address || !agent) return;
                       setPromoteStatus('paying');
                       try {
-                        // TODO: integrate real promotion payment
-                        await new Promise((r) => setTimeout(r, 1500));
+                        const txHash = await sendPayment(56, totalCost);
+                        if (!txHash) {
+                          setPromoteStatus('error');
+                          return;
+                        }
+                        await new Promise((r) => setTimeout(r, 3000));
+                        const result = await verifyPromotion(txHash, totalCost, promoteHours, agent.id);
+                        if (!result.success) {
+                          setPromoteStatus('error');
+                          return;
+                        }
                         setPromoteStatus('success');
                         fireGoldConfetti();
+                        refetchAgent();
                         setTimeout(() => {
                           setShowPromoteModal(false);
                           setPromoteStatus('idle');
@@ -1468,6 +2013,66 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             refetchAgent();
           }}
         />
+      )}
+
+      {/* Version History Modal — shows all previous prompts */}
+      {agent && (
+        <Modal isOpen={showVersionHistory} onClose={() => setShowVersionHistory(false)} title={`\uD83D\uDCDC ${t.agent.versionHistory}`}>
+          <div className="space-y-0">
+            {(() => {
+              // Current version is always the live agent state
+              const currentVersion = {
+                version: 'current',
+                label: t.agent.versionCurrent,
+                date: new Date(agent.updated_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                prompt: agent.prompt,
+                direction: agent.parsed_rules.direction_bias,
+                leverage: agent.parsed_rules.risk_management.max_leverage,
+                isCurrent: true,
+              };
+              // Genesis version from creation date
+              const genesisVersion = {
+                version: 'v1.0',
+                label: t.agent.versionGenesis,
+                date: new Date(agent.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+                prompt: agent.prompt,
+                direction: agent.parsed_rules.direction_bias,
+                leverage: agent.parsed_rules.risk_management.max_leverage,
+                isCurrent: false,
+              };
+              const hasEdits = new Date(agent.updated_at).getTime() - new Date(agent.created_at).getTime() > 60000;
+              const versions = hasEdits ? [currentVersion, genesisVersion] : [{ ...genesisVersion, isCurrent: true, label: t.agent.versionCurrent }];
+              return versions.map((v, i) => (
+                <div key={v.version} className="flex gap-3">
+                  <div className="flex flex-col items-center shrink-0 w-5">
+                    <div className={`w-3 h-3 rounded-full border-2 mt-1 ${v.isCurrent ? 'border-cyber-green bg-cyber-green/30' : 'border-gray-600 bg-gray-800'}`} />
+                    {i < versions.length - 1 && <div className="w-0.5 flex-1 bg-gray-700 my-1" />}
+                  </div>
+                  <div className="pb-4 flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="text-xs font-mono font-bold text-gray-200">{v.version}</span>
+                      <span className={`text-[8px] font-mono font-bold uppercase px-1.5 py-0.5 rounded ${v.isCurrent ? 'bg-cyber-green/15 text-cyber-green border border-cyber-green/30' : 'bg-gray-800 text-gray-500 border border-gray-700'}`}>
+                        {v.label}
+                      </span>
+                      <span className="text-[9px] font-mono text-gray-600">{v.date}</span>
+                    </div>
+                    {/* Show the actual prompt text */}
+                    <div className="bg-terminal-bg rounded p-2.5 border border-terminal-border mb-1">
+                      <p className="text-[10px] font-mono text-gray-600 uppercase mb-1">{t.agent.versionPrompt}:</p>
+                      <p className="text-[11px] font-mono text-cyber-green/80 leading-relaxed whitespace-pre-wrap">{v.prompt}</p>
+                    </div>
+                    <p className="text-[9px] font-mono text-gray-600">
+                      {t.agent.direction} {v.direction} | {t.agent.leverage} {v.leverage}x
+                    </p>
+                  </div>
+                </div>
+              ));
+            })()}
+            <p className="text-[9px] font-mono text-gray-600 pt-2 border-t border-terminal-border">
+              {t.agent.versionNote}
+            </p>
+          </div>
+        </Modal>
       )}
 
       {/* Toasts */}

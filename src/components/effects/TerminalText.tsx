@@ -1,67 +1,69 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 
 interface TerminalTextProps {
   lines: string[];
-  speed?: number;
+  speed?: number; // kept for API compat but no longer used for char-by-char
   className?: string;
   autoScroll?: boolean;
   maxLines?: number;
 }
 
-export function TerminalText({ lines, speed = 50, className = '', autoScroll = true, maxLines = 100 }: TerminalTextProps) {
-  const [displayedLines, setDisplayedLines] = useState<string[]>([]);
-  const [currentLineIndex, setCurrentLineIndex] = useState(0);
-  const [currentCharIndex, setCurrentCharIndex] = useState(0);
+/** Color logic for terminal lines */
+function getLineColor(line: string): string {
+  if (line.includes('[DECISION]') || line.includes('[SIGNAL]')) return 'text-cyber-gold font-bold';
+  if (line.includes('[REASON]')) return 'text-cyan-400';
+  if (line.includes('[WEB SEARCH]') || line.includes('[NEWS]')) return 'text-cyber-gold/80';
+  if (line.includes('[TECHNICAL]')) return 'text-fuchsia-400/80';
+  if (line.includes('[TRIGGER]') || line.includes('[EXEC]')) return 'text-cyber-gold';
+  if (line.includes('[PROFIT]')) return 'text-cyber-green font-bold';
+  if (line.includes('[LOSS]') || line.includes('[ERROR]')) return 'text-cyber-red';
+  if (line.includes('[AI')) return 'text-cyber-blue';
+  if (line.includes('\u25B8')) return 'text-gray-300'; // bullet headlines
+  if (line.includes('\u2501') || line.includes('\u2500')) return 'text-gray-600'; // separator lines
+  if (line.includes('[SYSTEM]')) return 'text-gray-500';
+  if (line.includes('[HEARTBEAT]') || line.includes('[STATUS]')) return 'text-gray-500';
+  if (line.includes('[PRICE]')) return 'text-cyber-green/70';
+  if (line.includes('[K-LINE]')) return 'text-gray-400';
+  return 'text-cyber-green';
+}
+
+export function TerminalText({ lines, className = '', autoScroll = true, maxLines = 100 }: TerminalTextProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const prevLengthRef = useRef(0);
 
-  useEffect(() => {
-    if (currentLineIndex >= lines.length) return;
-    const currentLine = lines[currentLineIndex] ?? '';
-    if (currentCharIndex < currentLine.length) {
-      const timer = setTimeout(() => {
-        setDisplayedLines((prev) => {
-          const newLines = [...prev];
-          newLines[currentLineIndex] = currentLine.slice(0, currentCharIndex + 1);
-          return newLines.slice(-maxLines);
-        });
-        setCurrentCharIndex((prev) => prev + 1);
-      }, speed);
-      return () => clearTimeout(timer);
-    } else {
-      const timer = setTimeout(() => {
-        setCurrentLineIndex((prev) => prev + 1);
-        setCurrentCharIndex(0);
-      }, speed * 5);
-      return () => clearTimeout(timer);
-    }
-  }, [currentLineIndex, currentCharIndex, lines, speed, maxLines]);
-
+  // Auto-scroll on new lines
   useEffect(() => {
     if (autoScroll && containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [displayedLines, autoScroll]);
+    prevLengthRef.current = lines.length;
+  }, [lines, autoScroll]);
+
+  const visibleLines = lines.slice(-maxLines);
 
   return (
     <div ref={containerRef} className={`font-mono text-sm overflow-y-auto ${className}`}>
-      {displayedLines.map((rawLine, i) => {
+      {visibleLines.map((rawLine, i) => {
         const line = rawLine ?? '';
+        const isNew = i >= prevLengthRef.current - (lines.length - visibleLines.length);
         return (
-          <div key={i} className="flex">
-            <span className="text-gray-600 mr-2 select-none">{String(i + 1).padStart(3, '0')}</span>
-            <span className={
-              line.includes('[TRIGGER]') || line.includes('[EXEC]') ? 'text-cyber-gold' :
-              line.includes('[PROFIT]') ? 'text-cyber-green neon-glow' :
-              line.includes('[LOSS]') || line.includes('[ERROR]') ? 'text-cyber-red' :
-              'text-cyber-green'
-            }>{line}</span>
+          <div
+            key={`${lines.length}-${i}`}
+            className={`flex ${isNew ? 'animate-[fadeIn_0.15s_ease-in]' : ''}`}
+          >
+            <span className="text-gray-700 mr-2 select-none text-[10px] leading-5">
+              {String(i + 1).padStart(3, '0')}
+            </span>
+            <span className={`leading-5 ${getLineColor(line)}`}>{line}</span>
           </div>
         );
       })}
       <div className="flex">
-        <span className="text-gray-600 mr-2 select-none">{String(displayedLines.length + 1).padStart(3, '0')}</span>
+        <span className="text-gray-700 mr-2 select-none text-[10px] leading-5">
+          {String(visibleLines.length + 1).padStart(3, '0')}
+        </span>
         <span className="text-cyber-green cursor-blink">_</span>
       </div>
     </div>

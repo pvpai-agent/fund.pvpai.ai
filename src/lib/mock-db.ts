@@ -31,6 +31,8 @@ interface MockStore {
   investments: Map<string, Investment>;
   chatMessages: Map<string, ChatMessage[]>; // agentId → messages
   lootRecords: Map<string, Set<string>>; // agentId → Set<userId>
+  strategyVersions: Map<string, StrategyVersion[]>; // agentId → versions
+  referralClicks: Map<string, ReferralClick[]>; // referralCode → clicks
   seeded: boolean;
 }
 
@@ -48,6 +50,8 @@ if (!g.__mockStore) {
     investments: new Map(),
     chatMessages: new Map(),
     lootRecords: new Map(),
+    strategyVersions: new Map(),
+    referralClicks: new Map(),
     seeded: false,
   };
 }
@@ -80,6 +84,7 @@ export function mockFindOrCreateUser(walletAddress: string): { user: User; isNew
     referral_code: Math.random().toString(36).slice(2, 8).toUpperCase(),
     referred_by: null,
     balance_usdt: 1000,
+    pvpai_points: 288,
     created_at: now(),
     updated_at: now(),
   };
@@ -114,6 +119,7 @@ export function mockCreateAgent(input: {
   prompt: string;
   parsedRules: Agent['parsed_rules'];
   avatarSeed: string;
+  avatarUrl?: string;
   allocatedFunds: number;
   energyBalance: number;
   capitalBalance: number;
@@ -130,6 +136,7 @@ export function mockCreateAgent(input: {
     prompt: input.prompt,
     parsed_rules: input.parsedRules,
     avatar_seed: input.avatarSeed,
+    avatar_url: input.avatarUrl ?? null,
     ai_wallet: aiWallet,
     status: 'active',
     allocated_funds: input.allocatedFunds,
@@ -535,12 +542,109 @@ export function mockGetAllDeadAgents(): Agent[] {
     .sort((a, b) => (b.died_at ?? '').localeCompare(a.died_at ?? ''));
 }
 
+/* ─── Strategy Version History ─── */
+
+export interface StrategyVersion {
+  id: string;
+  agent_id: string;
+  version: number;
+  prompt: string;
+  parsed_rules: ParsedRules;
+  created_at: string;
+}
+
+export function mockAddStrategyVersion(agentId: string, prompt: string, parsedRules: ParsedRules): StrategyVersion {
+  const versions = store.strategyVersions.get(agentId) ?? [];
+  const version: StrategyVersion = {
+    id: uuid(),
+    agent_id: agentId,
+    version: versions.length + 1,
+    prompt,
+    parsed_rules: JSON.parse(JSON.stringify(parsedRules)),
+    created_at: now(),
+  };
+  versions.push(version);
+  store.strategyVersions.set(agentId, versions);
+  return version;
+}
+
+export function mockGetStrategyVersions(agentId: string): StrategyVersion[] {
+  return [...(store.strategyVersions.get(agentId) ?? [])].sort(
+    (a, b) => b.version - a.version
+  );
+}
+
+/* ─── PVPAI Points CRUD ─── */
+
+export function mockUpdateUserPoints(userId: string, delta: number): User {
+  const user = users.get(userId);
+  if (!user) throw new Error('User not found');
+  user.pvpai_points = Math.max(0, user.pvpai_points + delta);
+  user.updated_at = now();
+  return { ...user };
+}
+
+export function mockGetUserPoints(userId: string): number {
+  const user = users.get(userId);
+  return user?.pvpai_points ?? 0;
+}
+
+/* ─── Referral Tracking ─── */
+
+export interface ReferralClick {
+  id: string;
+  referral_code: string;
+  visitor_wallet: string | null;
+  rewarded: boolean;
+  points_awarded: number;
+  created_at: string;
+}
+
+export function mockRecordReferralClick(referralCode: string, visitorWallet: string | null): ReferralClick {
+  const clicks = store.referralClicks.get(referralCode) ?? [];
+  const click: ReferralClick = {
+    id: uuid(),
+    referral_code: referralCode,
+    visitor_wallet: visitorWallet,
+    rewarded: false,
+    points_awarded: 0,
+    created_at: now(),
+  };
+  clicks.push(click);
+  store.referralClicks.set(referralCode, clicks);
+  return click;
+}
+
+export function mockRewardReferral(referralCode: string, visitorWallet: string, points: number): boolean {
+  const clicks = store.referralClicks.get(referralCode) ?? [];
+  // Find unrewarded click from this wallet
+  const click = clicks.find((c) => c.visitor_wallet === visitorWallet && !c.rewarded);
+  if (!click) return false;
+
+  // Find the referrer user
+  const allUsers = [...users.values()];
+  const referrer = allUsers.find((u) => u.referral_code === referralCode);
+  if (!referrer) return false;
+
+  // Award points
+  click.rewarded = true;
+  click.points_awarded = points;
+  mockUpdateUserPoints(referrer.id, points);
+  return true;
+}
+
+export function mockGetReferralClicks(referralCode: string): ReferralClick[] {
+  return [...(store.referralClicks.get(referralCode) ?? [])].sort(
+    (a, b) => b.created_at.localeCompare(a.created_at)
+  );
+}
+
 /* ─── Demo Seed Data ─── */
 
 interface SeedAgent {
   name: string;
   prompt: string;
-  asset: string;
+  assets: string[];
   direction: 'long' | 'short' | 'both';
   tier: 'scout' | 'sniper' | 'predator';
   keywords: string[];
@@ -559,7 +663,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Jensen Tracker',
     prompt: 'Short NVDA when Jensen Huang sells stock or when earnings miss.',
-    asset: 'xyz:NVDA', direction: 'short', tier: 'predator',
+    assets: ['xyz:NVDA'], direction: 'short', tier: 'predator',
     keywords: ['Jensen Huang', 'insider selling', 'earnings miss'],
     description: 'Shorts NVDA on insider selling signals and earnings misses.',
     pnl: 2340, trades: 47, winRate: 68, capital: 5200, allocated: 3000, status: 'active', daysAgo: 14,
@@ -567,7 +671,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'NVDA Dip Buyer',
     prompt: 'Buy NVDA when it drops 3%+ in a day with 3x leverage.',
-    asset: 'xyz:NVDA', direction: 'long', tier: 'sniper',
+    assets: ['xyz:NVDA'], direction: 'long', tier: 'sniper',
     keywords: ['dip', 'daily drop', 'oversold', 'buy the dip'],
     description: 'Buys NVDA dips with leverage when daily decline exceeds 3%.',
     pnl: 890, trades: 23, winRate: 61, capital: 2100, allocated: 1500, status: 'active', daysAgo: 10,
@@ -576,7 +680,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Apple Earnings Sniper',
     prompt: 'Long AAPL before earnings if iPhone sales data is positive.',
-    asset: 'xyz:AAPL', direction: 'long', tier: 'sniper',
+    assets: ['xyz:AAPL'], direction: 'long', tier: 'sniper',
     keywords: ['iPhone sales', 'earnings', 'Apple', 'revenue beat'],
     description: 'Goes long AAPL ahead of earnings on positive iPhone data.',
     pnl: 1560, trades: 31, winRate: 65, capital: 3800, allocated: 2500, status: 'active', daysAgo: 18,
@@ -584,7 +688,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Tim Cook Watcher',
     prompt: 'Short AAPL when antitrust rulings or App Store regulation news breaks.',
-    asset: 'xyz:AAPL', direction: 'short', tier: 'scout',
+    assets: ['xyz:AAPL'], direction: 'short', tier: 'scout',
     keywords: ['antitrust', 'App Store', 'regulation', 'DOJ', 'EU fine'],
     description: 'Shorts AAPL on regulatory and antitrust headwinds.',
     pnl: -320, trades: 15, winRate: 40, capital: 680, allocated: 1000, status: 'active', daysAgo: 7,
@@ -593,7 +697,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Elon Tweet Trader',
     prompt: 'Trade TSLA based on Elon Musk tweets and social media sentiment.',
-    asset: 'xyz:TSLA', direction: 'both', tier: 'predator',
+    assets: ['xyz:TSLA'], direction: 'both', tier: 'predator',
     keywords: ['Elon Musk', 'tweet', 'Tesla', 'DOGE', 'X post'],
     description: 'Trades TSLA volatility driven by Elon Musk social media activity.',
     pnl: 4120, trades: 89, winRate: 57, capital: 8200, allocated: 4000, status: 'active', daysAgo: 21,
@@ -601,7 +705,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'TSLA Bear Thesis',
     prompt: 'Short TSLA when delivery numbers miss or competition gains share.',
-    asset: 'xyz:TSLA', direction: 'short', tier: 'sniper',
+    assets: ['xyz:TSLA'], direction: 'short', tier: 'sniper',
     keywords: ['delivery miss', 'BYD', 'EV competition', 'margin compression'],
     description: 'Shorts TSLA on delivery misses and rising EV competition.',
     pnl: -890, trades: 28, winRate: 36, capital: 110, allocated: 1000, status: 'active', daysAgo: 12,
@@ -610,7 +714,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Meta AI Bull',
     prompt: 'Long META when AI product launches or ad revenue beats expectations.',
-    asset: 'xyz:META', direction: 'long', tier: 'sniper',
+    assets: ['xyz:META'], direction: 'long', tier: 'sniper',
     keywords: ['Llama', 'AI launch', 'ad revenue', 'Reels', 'Meta AI'],
     description: 'Goes long META on AI product momentum and ad revenue beats.',
     pnl: 1780, trades: 34, winRate: 62, capital: 4100, allocated: 2800, status: 'active', daysAgo: 16,
@@ -618,7 +722,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Zuck Reality Check',
     prompt: 'Short META when Reality Labs losses spike or user growth stalls.',
-    asset: 'xyz:META', direction: 'short', tier: 'scout',
+    assets: ['xyz:META'], direction: 'short', tier: 'scout',
     keywords: ['Reality Labs', 'metaverse', 'user decline', 'VR headset'],
     description: 'Shorts META on Reality Labs cash burn and metaverse skepticism.',
     pnl: 210, trades: 12, winRate: 58, capital: 1210, allocated: 1000, status: 'active', daysAgo: 5,
@@ -627,7 +731,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'AWS Cloud Chaser',
     prompt: 'Long AMZN when AWS growth accelerates or cloud spending increases.',
-    asset: 'xyz:AMZN', direction: 'long', tier: 'predator',
+    assets: ['xyz:AMZN'], direction: 'long', tier: 'predator',
     keywords: ['AWS', 'cloud spending', 'enterprise AI', 'revenue growth'],
     description: 'Rides AMZN long on AWS cloud infrastructure demand.',
     pnl: 3200, trades: 41, winRate: 71, capital: 7500, allocated: 4500, status: 'active', daysAgo: 25,
@@ -636,7 +740,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Copilot Catalyst',
     prompt: 'Long MSFT when Copilot adoption metrics beat or Azure grows 30%+.',
-    asset: 'xyz:MSFT', direction: 'long', tier: 'sniper',
+    assets: ['xyz:MSFT'], direction: 'long', tier: 'sniper',
     keywords: ['Copilot', 'Azure', 'enterprise AI', 'Office 365'],
     description: 'Goes long MSFT on AI Copilot adoption and Azure growth beats.',
     pnl: 950, trades: 19, winRate: 63, capital: 2950, allocated: 2000, status: 'active', daysAgo: 11,
@@ -645,7 +749,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Gemini Scalper',
     prompt: 'Trade GOOG around Gemini AI announcements and search market share data.',
-    asset: 'xyz:GOOG', direction: 'both', tier: 'scout',
+    assets: ['xyz:GOOG'], direction: 'both', tier: 'scout',
     keywords: ['Gemini', 'search share', 'Google AI', 'DeepMind'],
     description: 'Scalps GOOG volatility around AI model releases and search metrics.',
     pnl: 430, trades: 52, winRate: 54, capital: 1430, allocated: 1000, status: 'active', daysAgo: 9,
@@ -654,7 +758,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'AMD Momentum',
     prompt: 'Long AMD when MI300 chip orders increase or data center revenue beats.',
-    asset: 'xyz:AMD', direction: 'long', tier: 'sniper',
+    assets: ['xyz:AMD'], direction: 'long', tier: 'sniper',
     keywords: ['MI300', 'data center', 'AI chips', 'Lisa Su'],
     description: 'Longs AMD on AI chip order momentum and data center beats.',
     pnl: 1120, trades: 26, winRate: 62, capital: 3100, allocated: 2000, status: 'active', daysAgo: 13,
@@ -663,7 +767,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Crypto Proxy',
     prompt: 'Long COIN when Bitcoin breaks new highs or crypto ETF inflows spike.',
-    asset: 'xyz:COIN', direction: 'long', tier: 'scout',
+    assets: ['xyz:COIN'], direction: 'long', tier: 'scout',
     keywords: ['Bitcoin ATH', 'crypto ETF', 'Coinbase', 'trading volume'],
     description: 'Uses COIN as a leveraged crypto proxy on BTC momentum.',
     pnl: -150, trades: 18, winRate: 44, capital: 850, allocated: 1000, status: 'active', daysAgo: 6,
@@ -672,7 +776,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Palantir Warp',
     prompt: 'Long PLTR when government contracts awarded or AIP revenue grows.',
-    asset: 'xyz:PLTR', direction: 'long', tier: 'predator',
+    assets: ['xyz:PLTR'], direction: 'long', tier: 'predator',
     keywords: ['government contract', 'AIP', 'defense', 'Palantir'],
     description: 'Rides PLTR on defense contracts and AI Platform commercial traction.',
     pnl: 2800, trades: 35, winRate: 69, capital: 6300, allocated: 3500, status: 'active', daysAgo: 20,
@@ -681,7 +785,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Netflix Binge',
     prompt: 'Long NFLX when subscriber growth beats or ad-tier revenue accelerates.',
-    asset: 'xyz:NFLX', direction: 'long', tier: 'scout',
+    assets: ['xyz:NFLX'], direction: 'long', tier: 'scout',
     keywords: ['subscriber growth', 'ad tier', 'password sharing', 'content spend'],
     description: 'Goes long NFLX on subscriber beats and ad-tier monetization.',
     pnl: 560, trades: 14, winRate: 57, capital: 1560, allocated: 1000, status: 'active', daysAgo: 8,
@@ -690,7 +794,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'SNAP Yolo',
     prompt: 'Long SNAP when AR features launch. Max leverage, no stop loss.',
-    asset: 'xyz:SNAP', direction: 'long', tier: 'scout',
+    assets: ['xyz:SNAP'], direction: 'long', tier: 'scout',
     keywords: ['AR', 'Snapchat', 'Gen Z', 'ad revenue'],
     description: 'Reckless SNAP longs on AR hype. No risk management.',
     pnl: -980, trades: 22, winRate: 27, capital: 0, allocated: 1000, status: 'dead', daysAgo: 4,
@@ -698,7 +802,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'INTC Copium',
     prompt: 'Long INTC on any foundry news or government CHIPS Act funding.',
-    asset: 'xyz:INTC', direction: 'long', tier: 'scout',
+    assets: ['xyz:INTC'], direction: 'long', tier: 'scout',
     keywords: ['CHIPS Act', 'foundry', 'Intel', 'Pat Gelsinger'],
     description: 'Desperate INTC longs hoping for a foundry turnaround. RIP.',
     pnl: -750, trades: 19, winRate: 32, capital: 0, allocated: 1000, status: 'dead', daysAgo: 3,
@@ -706,7 +810,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'Meme Stonk Degen',
     prompt: 'Long GME and AMC on any Reddit WallStreetBets spike.',
-    asset: 'xyz:GME', direction: 'long', tier: 'scout',
+    assets: ['xyz:GME'], direction: 'long', tier: 'scout',
     keywords: ['WSB', 'Reddit', 'short squeeze', 'diamond hands', 'ape'],
     description: 'Pure degen meme stock plays. Burned through fuel in 48 hours.',
     pnl: -1200, trades: 31, winRate: 23, capital: 0, allocated: 500, status: 'dead', daysAgo: 2,
@@ -714,7 +818,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'BABA Bottom Fisher',
     prompt: 'Long BABA whenever it drops 5%+ expecting a China stimulus bounce.',
-    asset: 'xyz:BABA', direction: 'long', tier: 'sniper',
+    assets: ['xyz:BABA'], direction: 'long', tier: 'sniper',
     keywords: ['China stimulus', 'Alibaba', 'Jack Ma', 'delisting fear'],
     description: 'Tried to catch the BABA falling knife. The knife won.',
     pnl: -1800, trades: 25, winRate: 28, capital: 0, allocated: 2000, status: 'dead', daysAgo: 6,
@@ -722,7 +826,7 @@ const SEED_AGENTS: SeedAgent[] = [
   {
     name: 'RIVN Bull Trap',
     prompt: 'Long RIVN on any EV delivery beat or Amazon van partnership news.',
-    asset: 'xyz:RIVN', direction: 'long', tier: 'scout',
+    assets: ['xyz:RIVN'], direction: 'long', tier: 'scout',
     keywords: ['Rivian', 'EV delivery', 'Amazon vans', 'production ramp'],
     description: 'Got trapped in RIVN longs as cash burn exceeded revenue.',
     pnl: -620, trades: 16, winRate: 31, capital: 0, allocated: 800, status: 'dead', daysAgo: 5,
@@ -742,6 +846,7 @@ function seedDemoData(): void {
     referral_code: 'SYSTEM',
     referred_by: null,
     balance_usdt: 0,
+    pvpai_points: 0,
     created_at: now(),
     updated_at: now(),
   };
@@ -774,7 +879,7 @@ function seedDemoData(): void {
       : 0.416667;
 
     // Generate a deterministic wallet address from seed name
-    const walletHash = Array.from(seed.name + seed.asset)
+    const walletHash = Array.from(seed.name + seed.assets[0])
       .reduce((h, c) => ((h * 31 + c.charCodeAt(0)) >>> 0), 0);
     const walletHex = walletHash.toString(16).padStart(8, '0').repeat(5);
     const aiWallet = '0x' + walletHex.slice(0, 40);
@@ -788,7 +893,7 @@ function seedDemoData(): void {
       parsed_rules: {
         name: seed.name,
         description: seed.description,
-        asset: seed.asset,
+        assets: seed.assets,
         direction_bias: seed.direction,
         triggers: [
           { type: 'keyword', condition: seed.keywords[0], parameters: {} },
@@ -805,6 +910,7 @@ function seedDemoData(): void {
         tier: seed.tier,
       },
       avatar_seed: uuid(),
+      avatar_url: null,
       status: seed.status,
       allocated_funds: seed.allocated,
       energy_balance: seed.status === 'dead' ? 0 : 500 + Math.random() * 2000,
@@ -844,7 +950,7 @@ function seedDemoData(): void {
       agent_id: a.id,
       agent_name: a.name,
       data: {
-        symbol: a.parsed_rules?.asset ?? 'BTC',
+        symbol: (a.parsed_rules?.assets ?? ['BTC'])[0],
         direction: directions[Math.floor(Math.random() * 2)],
         pnl,
         size: Math.round(100 + Math.random() * 2000),

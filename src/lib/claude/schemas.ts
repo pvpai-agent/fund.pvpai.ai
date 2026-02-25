@@ -17,7 +17,7 @@ export const RiskManagementSchema = z.object({
 export const TradingStrategySchema = z.object({
   name: z.string(),
   description: z.string(),
-  asset: z.string(),
+  assets: z.array(z.string()).min(1),
   direction_bias: z.enum(['long', 'short', 'both']),
   triggers: z.array(TriggerSchema).min(1),
   risk_management: RiskManagementSchema,

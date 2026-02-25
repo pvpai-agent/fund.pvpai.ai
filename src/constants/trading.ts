@@ -105,50 +105,92 @@ export const AGENT_TIERS: Record<AgentTier, TierConfig> = {
 
 /* ─── Data Source Add-ons ─── */
 
-export type DataSourceId = 'hl_kline' | 'hot_news' | 'twitter' | 'pvpai_alpha';
+export type DataSourceId = 'hl_kline' | 'ai_web_search' | 'twitter' | 'pvpai_alpha' | 'sec_macro' | 'orbit_space';
+
+export interface DataSourcePresale {
+  enabled: boolean;
+  /** One-time presale price in USDC */
+  price_usdc: number;
+  /** Months of service included in presale */
+  months_included: number;
+  /** Expected launch date (YYYY-MM) */
+  launch_date: string;
+}
 
 export interface DataSourceConfig {
   id: DataSourceId;
   name: string;
   description: string;
   icon: string;
-  /** Cost in USDC per day (0 = free) */
+  /** Actual cost in USDC per day (0 = free / promotional) */
   cost_per_day: number;
+  /** Original price before discount (shown as strikethrough when on promo) */
+  original_cost_per_day: number;
   /** Whether included by default (free sources) */
   included: boolean;
+  /** Presale configuration — when set, the source is not yet live and sold as pre-purchase */
+  presale?: DataSourcePresale;
 }
 
 export const DATA_SOURCES: DataSourceConfig[] = [
   {
     id: 'hl_kline',
-    name: 'Hyperliquid K-Line',
-    description: 'Real-time candlestick data from Hyperliquid DEX',
+    name: 'K-Line & Free RSS',
+    description: 'Real-time candlestick data from Hyperliquid DEX + free RSS news feeds',
     icon: '📊',
     cost_per_day: 0,
+    original_cost_per_day: 5,
     included: true,
   },
   {
-    id: 'hot_news',
-    name: 'Trending News',
-    description: 'AI autonomously searches the web for the latest market news about your asset',
-    icon: '📰',
+    id: 'ai_web_search',
+    name: 'AI Web Search',
+    description: 'Built-in LLM web search — Claude autonomously searches the internet for real-time news, events, and market data',
+    icon: '🌐',
     cost_per_day: 0,
+    original_cost_per_day: 3,
     included: true,
+  },
+  {
+    id: 'sec_macro',
+    name: 'SEC Filings & Macro Data',
+    description: 'SEC earnings reports, Fed decisions, CPI/NFP data, and macro economic indicators',
+    icon: '📋',
+    cost_per_day: 3,
+    original_cost_per_day: 8,
+    included: false,
   },
   {
     id: 'twitter',
-    name: 'X / Twitter Feed',
-    description: 'AI searches X/Twitter for real-time social signals and KOL sentiment',
+    name: 'Crypto Twitter Sentiment',
+    description: 'AI scans X/Twitter for real-time crypto KOL sentiment and social signals',
     icon: '🐦',
-    cost_per_day: 10,
+    cost_per_day: 2,
+    original_cost_per_day: 5,
     included: false,
   },
   {
     id: 'pvpai_alpha',
-    name: 'PVP AI Alpha',
-    description: 'Deep AI research: whale tracking, institutional flows, multi-source cross-validation',
+    name: 'PVPAI Exclusive Alpha Matrix',
+    description: 'Aggregated institutional order flows, dark pool data, and proprietary sentiment analysis from the PVPAI hedge fund team',
     icon: '🔮',
-    cost_per_day: 30,
+    cost_per_day: 10,
+    original_cost_per_day: 25,
     included: false,
+  },
+  {
+    id: 'orbit_space',
+    name: 'Orbit AI Space Cloud Node',
+    description: 'Decentralized & censorship-resistant. Your Agent lives on a LEO satellite. Unbannable, untraceable, granting true digital sovereignty',
+    icon: '🛰️',
+    cost_per_day: 20,
+    original_cost_per_day: 50,
+    included: false,
+    presale: {
+      enabled: true,
+      price_usdc: 88,
+      months_included: 1,
+      launch_date: '2027-01',
+    },
   },
 ];

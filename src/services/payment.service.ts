@@ -11,7 +11,7 @@ export async function processAgentMint(
   walletAddress: string,
   txHash: string,
   mintAmount: number,
-  agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; cloneParentId?: string }
+  agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; avatarUrl?: string; cloneParentId?: string }
 ): Promise<{ success: boolean; agentId?: string; error?: string }> {
   const existingTx = await getTransactionByTxHash(txHash);
   if (existingTx) return { success: false, error: 'Transaction already processed' };
@@ -34,6 +34,7 @@ export async function processAgentMint(
     prompt: agentInput.prompt,
     parsedRules: agentInput.parsedRules,
     avatarSeed: agentInput.avatarSeed,
+    avatarUrl: agentInput.avatarUrl,
     allocatedFunds: capitalUsd,
     energyBalance: pvpPoints,
     capitalBalance: capitalUsd,

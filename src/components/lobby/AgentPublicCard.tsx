@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { Badge } from '@/components/ui/Badge';
+import { useT } from '@/hooks/useTranslation';
 import type { Agent } from '@/types/database';
 
 function getTierBadge(tier: string): { variant: 'green' | 'blue' | 'red'; label: string } {
@@ -65,7 +66,9 @@ function getFuelInfo(agent: Agent): FuelInfo {
 }
 
 export function AgentPublicCard({ agent }: { agent: Agent }) {
+  const t = useT();
   const tier = agent.parsed_rules?.tier ?? 'scout';
+  const hasOrbit = agent.parsed_rules?.data_sources?.includes('orbit_space') ?? false;
   const { variant, label: tierLabel } = getTierBadge(tier);
   const pnlSign = agent.total_pnl >= 0 ? '+' : '';
   const roi = agent.allocated_funds > 0
@@ -74,15 +77,20 @@ export function AgentPublicCard({ agent }: { agent: Agent }) {
   const ticker = makeTicker(agent.name);
   const wallet = fakeWallet(agent.user_id);
   const fuel = getFuelInfo(agent);
-  const asset = (agent.parsed_rules?.asset ?? 'BTC').replace('xyz:', '');
+  const asset = (agent.parsed_rules?.assets ?? ['BTC']).map(a => a.replace('xyz:', '')).join(', ');
 
   return (
     <div className="border border-terminal-border bg-cyber-dark rounded-lg p-5 hover:border-cyber-green/40 transition-all duration-200 group relative overflow-hidden">
       {/* Top row: avatar + identity */}
       <div className="flex items-start gap-2.5 mb-2.5">
-        <div className={`w-9 h-9 rounded ${avatarColor(agent.avatar_seed)} flex items-center justify-center shrink-0`}>
-          <span className="text-[10px] font-mono font-bold text-black">{avatarGlyph(tier)}</span>
-        </div>
+        {agent.avatar_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={agent.avatar_url} alt="" className="w-9 h-9 rounded shrink-0 object-cover" />
+        ) : (
+          <div className={`w-9 h-9 rounded ${avatarColor(agent.avatar_seed)} flex items-center justify-center shrink-0`}>
+            <span className="text-[10px] font-mono font-bold text-black">{avatarGlyph(tier)}</span>
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <h3 className="font-mono font-bold text-xs text-cyber-green truncate">
@@ -93,6 +101,14 @@ export function AgentPublicCard({ agent }: { agent: Agent }) {
           <div className="flex items-center gap-2 mt-0.5">
             <span className="text-[9px] font-mono text-gray-600">by {wallet}</span>
             <Badge variant={variant} className="text-[8px] px-1 py-0">{tierLabel}</Badge>
+            {hasOrbit && (
+              <span className="relative group/orbit inline-flex items-center gap-0.5 px-1 py-0 rounded text-[8px] font-mono uppercase tracking-wider border border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-400 cursor-help">
+                {'\uD83D\uDEF0\uFE0F'} {t.common.orbitBadge}
+                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-56 px-2.5 py-2 rounded bg-cyber-darker border border-fuchsia-500/30 text-[9px] font-mono text-gray-300 leading-relaxed opacity-0 pointer-events-none group-hover/orbit:opacity-100 group-hover/orbit:pointer-events-auto transition-opacity duration-200 z-50 shadow-lg normal-case tracking-normal">
+                  {t.common.orbitTooltip}
+                </span>
+              </span>
+            )}
           </div>
         </div>
       </div>

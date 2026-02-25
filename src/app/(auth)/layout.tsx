@@ -13,7 +13,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
           <Sidebar />
           {/* Spacer for fixed sidebar on lg screens */}
           <div className="hidden lg:block w-56 shrink-0" />
-          <main className="flex-1 p-6 min-h-[calc(100vh-52px)]">
+          <main className="flex-1 min-w-0 p-6 min-h-[calc(100vh-52px)]">
             {children}
           </main>
         </div>

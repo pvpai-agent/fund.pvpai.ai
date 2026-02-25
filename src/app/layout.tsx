@@ -10,7 +10,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'PVP AI - The Agent Lab',
+  title: 'PVPAI OS — Autonomous Trading Agents',
   description: 'AI-powered autonomous trading agents on Hyperliquid. Trade stocks, crypto, commodities & more.',
   keywords: ['AI', 'trading', 'Hyperliquid', 'DeFi', 'hedge fund', 'autonomous agents', 'TradeFi'],
 };

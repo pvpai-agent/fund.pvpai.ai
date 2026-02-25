@@ -12,20 +12,24 @@ export interface OpenTradeInput {
   leverage: number;
   triggerReason: string;
   triggerData?: Record<string, unknown>;
+  /** The asset symbol to trade (e.g. 'BTC', 'xyz:NVDA') */
+  symbol?: string;
 }
 
 export async function openTrade(input: OpenTradeInput): Promise<Trade> {
   const supabase = createServerClient();
 
+  const symbol = input.symbol ?? TRADING.DEFAULT_SYMBOL;
+
   // Get current price
-  const currentPrice = await getMarkPrice(TRADING.DEFAULT_SYMBOL);
+  const currentPrice = await getMarkPrice(symbol);
 
   // Calculate size in units
   const sizeInUnits = input.sizeUsd / currentPrice;
 
   // Place order on Hyperliquid
   const orderResult = await placeMarketOrder({
-    symbol: TRADING.DEFAULT_SYMBOL,
+    symbol,
     isBuy: input.direction === 'long',
     size: sizeInUnits,
     leverage: input.leverage,
@@ -37,7 +41,7 @@ export async function openTrade(input: OpenTradeInput): Promise<Trade> {
     .insert({
       agent_id: input.agentId,
       user_id: input.userId,
-      symbol: TRADING.DEFAULT_SYMBOL,
+      symbol,
       direction: input.direction,
       size: sizeInUnits,
       leverage: input.leverage,

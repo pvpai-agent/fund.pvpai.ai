@@ -90,7 +90,8 @@ interface LobbyContentProps {
 function AgentCard({ agent, isPromoted }: { agent: Agent; isPromoted?: boolean }) {
   const t = useT();
   const tier = agent.parsed_rules?.tier ?? 'scout';
-  const asset = (agent.parsed_rules?.asset ?? 'BTC').replace('xyz:', '');
+  const hasOrbit = agent.parsed_rules?.data_sources?.includes('orbit_space') ?? false;
+  const asset = (agent.parsed_rules?.assets ?? ['BTC']).map(a => a.replace('xyz:', '')).join(', ');
   const roi = agent.allocated_funds > 0 ? ((agent.total_pnl / agent.allocated_funds) * 100) : 0;
   const pnlSign = agent.total_pnl >= 0 ? '+' : '';
   const ticker = makeTicker(agent.name);
@@ -117,9 +118,14 @@ function AgentCard({ agent, isPromoted }: { agent: Agent; isPromoted?: boolean }
 
       {/* Header: avatar + name */}
       <div className="flex items-center gap-2.5 mb-2.5">
-        <div className={`w-9 h-9 rounded ${avatarBg} flex items-center justify-center shrink-0`}>
-          <span className="text-[10px] font-mono font-bold text-black">{tierGlyph(tier)}</span>
-        </div>
+        {agent.avatar_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={agent.avatar_url} alt="" className="w-9 h-9 rounded shrink-0 object-cover" />
+        ) : (
+          <div className={`w-9 h-9 rounded ${avatarBg} flex items-center justify-center shrink-0`}>
+            <span className="text-[10px] font-mono font-bold text-black">{tierGlyph(tier)}</span>
+          </div>
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <h3 className="font-mono font-bold text-xs text-cyber-green truncate group-hover:neon-glow transition-all">{agent.name}</h3>
@@ -130,6 +136,14 @@ function AgentCard({ agent, isPromoted }: { agent: Agent; isPromoted?: boolean }
             <span className={`inline-flex items-center px-1 py-0 rounded text-[7px] font-mono uppercase tracking-wider border ${tierBadgeClass(tier)}`}>
               {tier.toUpperCase()}
             </span>
+            {hasOrbit && (
+              <span className="relative group/orbit inline-flex items-center gap-0.5 px-1 py-0 rounded text-[7px] font-mono uppercase tracking-wider border border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-400 cursor-help">
+                {'\uD83D\uDEF0\uFE0F'} {t.common.orbitBadge}
+                <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 w-56 px-2.5 py-2 rounded bg-cyber-darker border border-fuchsia-500/30 text-[9px] font-mono text-gray-300 leading-relaxed opacity-0 pointer-events-none group-hover/orbit:opacity-100 group-hover/orbit:pointer-events-auto transition-opacity duration-200 z-50 shadow-lg normal-case tracking-normal">
+                  {t.common.orbitTooltip}
+                </span>
+              </span>
+            )}
           </div>
         </div>
       </div>

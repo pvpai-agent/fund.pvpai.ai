@@ -12,6 +12,7 @@ export interface User {
   referral_code: string;
   referred_by: string | null;
   balance_usdt: number;
+  pvpai_points: number;
   created_at: string;
   updated_at: string;
 }
@@ -23,6 +24,7 @@ export interface Agent {
   parsed_rules: ParsedRules;
   name: string;
   avatar_seed: string;
+  avatar_url: string | null;
   ai_wallet: string;
   status: AgentStatus;
   allocated_funds: number;
@@ -114,7 +116,7 @@ export interface Investment {
 export interface ParsedRules {
   name: string;
   description: string;
-  asset: string;
+  assets: string[];
   direction_bias: 'long' | 'short' | 'both';
   triggers: Array<{
     type: 'keyword' | 'price_level' | 'time_based' | 'momentum';
@@ -133,4 +135,90 @@ export interface ParsedRules {
   tier?: 'scout' | 'sniper' | 'predator';
   /** Selected data source IDs */
   data_sources?: string[];
+  /** Revenue split configuration (percentages, must sum to 100) */
+  revenue_split?: {
+    /** % of profits returned to liquidity pool (LP investors) */
+    lp_pct: number;
+    /** % of profits sent to agent treasury (agent's own wallet) */
+    agent_pct: number;
+    /** % of profits sent to agent creator */
+    creator_pct: number;
+  };
+}
+
+/**
+ * Known asset symbol → aliases for inference.
+ * When parsed_rules.assets is the default ['BTC'] but description/keywords
+ * clearly mention a different asset, we override with the detected asset.
+ */
+const ASSET_ALIASES: Record<string, string[]> = {
+  'xyz:NVDA': ['NVDA', 'Nvidia', 'Jensen Huang', 'GeForce', 'H100', 'B200'],
+  'xyz:TSLA': ['TSLA', 'Tesla', 'Elon Musk'],
+  'xyz:AAPL': ['AAPL', 'Apple', 'iPhone', 'Tim Cook'],
+  'xyz:MSFT': ['MSFT', 'Microsoft', 'Copilot', 'Azure'],
+  'xyz:AMZN': ['AMZN', 'Amazon', 'AWS'],
+  'xyz:GOOGL': ['GOOGL', 'GOOG', 'Google', 'Alphabet', 'Gemini'],
+  'xyz:META': ['META', 'Meta', 'Facebook', 'Zuckerberg', 'Instagram'],
+  'xyz:HOOD': ['HOOD', 'Robinhood'],
+  'xyz:MSTR': ['MSTR', 'MicroStrategy', 'Saylor'],
+  'xyz:ORCL': ['ORCL', 'Oracle'],
+  'xyz:AVGO': ['AVGO', 'Broadcom'],
+  'xyz:MU': ['MU ', 'Micron'],  // space after MU to avoid false matches
+  'xyz:SPACEX': ['SPACEX', 'SpaceX'],
+  'xyz:OPENAI': ['OPENAI', 'OpenAI'],
+  'xyz:SPY': ['SPY', 'S&P 500', 'S&P500'],
+  'xyz:QQQ': ['QQQ', 'Nasdaq 100', 'Nasdaq100'],
+  'xyz:GLD': ['GLD ', 'gold'],  // space to avoid "Goldman" matches
+  'xyz:SLV': ['SLV', 'silver'],
+  'ETH': ['ETH', 'Ethereum', 'Ether'],
+  'SOL': ['SOL', 'Solana'],
+  'XRP': ['XRP', 'Ripple'],
+  'xyz:PEUR': ['PEUR', 'EUR/USD', 'Euro'],
+};
+
+function inferAssetsFromContext(rules: ParsedRules): string[] | null {
+  const text = [
+    rules.name ?? '',
+    rules.description ?? '',
+    ...(rules.keywords ?? []),
+  ].join(' ');
+
+  if (!text.trim()) return null;
+
+  const detected: string[] = [];
+  for (const [symbol, aliases] of Object.entries(ASSET_ALIASES)) {
+    for (const alias of aliases) {
+      if (text.toLowerCase().includes(alias.toLowerCase().trim())) {
+        detected.push(symbol);
+        break;
+      }
+    }
+  }
+
+  // Only override if we found non-BTC assets (the default)
+  if (detected.length > 0 && !(detected.length === 1 && detected[0] === 'BTC')) {
+    return detected;
+  }
+  return null;
+}
+
+/** Get assets array from parsed rules (handles backward compat with legacy single-asset field) */
+export function getAgentAssets(rules: ParsedRules | null | undefined): string[] {
+  if (!rules) return ['BTC'];
+
+  // If assets are set and NOT just the default ['BTC'], use them directly
+  if (rules.assets && rules.assets.length > 0) {
+    const isDefault = rules.assets.length === 1 && rules.assets[0] === 'BTC';
+    if (!isDefault) return rules.assets;
+
+    // Assets is ['BTC'] — check if description/keywords suggest a different asset
+    const inferred = inferAssetsFromContext(rules);
+    if (inferred) return inferred;
+    return rules.assets;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const legacy = (rules as any).asset;
+  if (legacy && typeof legacy === 'string') return [legacy];
+  return ['BTC'];
 }

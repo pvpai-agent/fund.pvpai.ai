@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { name, prompt, parsedRules, mintAmount, avatarSeed } = body;
+    const { name, prompt, parsedRules, mintAmount, avatarSeed, avatarUrl } = body;
 
     if (!name || !prompt || !parsedRules || !mintAmount || !avatarSeed) {
       return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 });
@@ -52,6 +52,7 @@ export async function POST(req: NextRequest) {
       prompt,
       parsedRules,
       avatarSeed,
+      avatarUrl: avatarUrl || undefined,
       allocatedFunds: capitalUsd,
       energyBalance: pvpPoints,
       capitalBalance: capitalUsd,
