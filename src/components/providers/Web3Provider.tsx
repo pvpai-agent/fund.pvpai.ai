@@ -3,7 +3,7 @@
 import { createAppKit } from '@reown/appkit/react';
 import { WagmiProvider, type Config } from 'wagmi';
 import { http } from 'wagmi';
-import { bsc } from '@reown/appkit/networks';
+import { bsc, monad } from '@reown/appkit/networks';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiAdapter } from '@reown/appkit-adapter-wagmi';
 import { type ReactNode, useEffect } from 'react';
@@ -12,6 +12,8 @@ import { useTheme } from 'next-themes';
 const queryClient = new QueryClient();
 
 const projectId = process.env.NEXT_PUBLIC_REOWN_PROJECT_ID ?? '';
+const BSC_RPC_URL = process.env.NEXT_PUBLIC_BSC_RPC_URL ?? 'https://bsc-dataseed.binance.org/';
+const MONAD_RPC_URL = process.env.NEXT_PUBLIC_MONAD_RPC_URL ?? 'https://rpc.monad.xyz';
 
 const metadata = {
   name: 'PVPAI OS',
@@ -21,17 +23,18 @@ const metadata = {
 };
 
 const wagmiAdapter = new WagmiAdapter({
-  networks: [bsc],
+  networks: [bsc, monad],
   projectId,
   ssr: true,
   transports: {
-    [bsc.id]: http('https://bsc-dataseed.binance.org/'),
+    [bsc.id]: http(BSC_RPC_URL),
+    [monad.id]: http(MONAD_RPC_URL),
   },
 });
 
 createAppKit({
   adapters: [wagmiAdapter],
-  networks: [bsc],
+  networks: [bsc, monad],
   defaultNetwork: bsc,
   projectId,
   metadata,

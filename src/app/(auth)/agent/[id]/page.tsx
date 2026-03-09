@@ -31,6 +31,7 @@ import { useUser } from '@/hooks/useUser';
 import { canUpgrade } from '@/constants/upgrades';
 import { useT } from '@/hooks/useTranslation';
 import { getAgentAssets } from '@/types/database';
+import { getChainName, isSupportedChainId, resolveSupportedChainId } from '@/constants/chains';
 
 export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -115,6 +116,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const { user } = useUser();
   const t = useT();
+  const paymentChainId = resolveSupportedChainId(currentChainId);
+  const paymentChainName = getChainName(paymentChainId);
+  const isOnSupportedChain = isSupportedChainId(currentChainId);
 
   // Progress messages for long-running withdrawal (HL → Arbitrum can take 1-5 min)
   const withdrawSteps = [
@@ -267,7 +271,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     setRechargeError('');
 
     try {
-      const txHash = await sendPayment(56, rechargeAmount);
+      const txHash = await sendPayment(paymentChainId, rechargeAmount);
       if (!txHash) {
         setRechargeError(t.recharge.txFailed);
         setRechargeStatus('error');
@@ -277,7 +281,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setRechargeStatus('verifying');
       await new Promise((r) => setTimeout(r, 5000));
 
-      const result = await verifyRecharge(txHash, rechargeAmount, agent.id);
+      const result = await verifyRecharge(txHash, rechargeAmount, agent.id, paymentChainId);
       if (!result.success) {
         setRechargeError(result.error || t.recharge.verifyFailed);
         setRechargeStatus('error');
@@ -1362,9 +1366,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         </p>
                       </div>
                       <div className="flex items-center gap-1.5">
-                        <div className={`w-1.5 h-1.5 rounded-full ${currentChainId === 56 ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
-                        <span className={`text-[9px] font-mono ${currentChainId === 56 ? 'text-cyber-green' : 'text-cyber-red'}`}>
-                          {currentChainId === 56 ? 'BSC' : t.common.wrongChain}
+                        <div className={`w-1.5 h-1.5 rounded-full ${isOnSupportedChain ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
+                        <span className={`text-[9px] font-mono ${isOnSupportedChain ? 'text-cyber-green' : 'text-cyber-red'}`}>
+                          {isOnSupportedChain ? paymentChainName : t.common.wrongChain}
                         </span>
                       </div>
                     </div>
@@ -1775,13 +1779,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       if (!address || !agent) return;
                       setPromoteStatus('paying');
                       try {
-                        const txHash = await sendPayment(56, totalCost);
+                        const txHash = await sendPayment(paymentChainId, totalCost);
                         if (!txHash) {
                           setPromoteStatus('error');
                           return;
                         }
                         await new Promise((r) => setTimeout(r, 3000));
-                        const result = await verifyPromotion(txHash, totalCost, promoteHours, agent.id);
+                        const result = await verifyPromotion(txHash, totalCost, promoteHours, agent.id, paymentChainId);
                         if (!result.success) {
                           setPromoteStatus('error');
                           return;

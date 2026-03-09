@@ -5,6 +5,7 @@ import { getAgentById } from '@/services/agent.service';
 import { getTransactionByTxHash } from '@/services/ledger.service';
 import { createInvestment } from '@/services/investment.service';
 import { verifyOnChainPayment } from '@/lib/web3/payment';
+import { DEFAULT_CHAIN_ID, isSupportedChainId } from '@/constants/chains';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const limited = rateLimit(req, 10, 60_000);
@@ -15,7 +16,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const { id } = await params;
-    const { txHash, amount } = await req.json();
+    const { txHash, amount, chainId } = await req.json();
+    const activeChainId = typeof chainId === 'number' && isSupportedChainId(chainId)
+      ? chainId
+      : DEFAULT_CHAIN_ID;
 
     if (!amount || amount < 10) {
       return NextResponse.json({ success: false, error: 'Minimum investment is $10' }, { status: 400 });
@@ -37,7 +41,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         return NextResponse.json({ success: false, error: 'Transaction already processed' }, { status: 400 });
       }
 
-      const verification = await verifyOnChainPayment(txHash, amount, auth.wallet);
+      const verification = await verifyOnChainPayment(txHash, amount, auth.wallet, activeChainId);
       if (!verification.verified) {
         return NextResponse.json({ success: false, error: 'Payment verification failed' }, { status: 400 });
       }

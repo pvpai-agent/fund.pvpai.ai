@@ -6,18 +6,29 @@ import { recordTransaction, getTransactionByTxHash } from './ledger.service';
 import { createAgent } from './agent.service';
 import { calculatePvpFromUsd, getTierBurnRate, rechargeAgent } from './metabolism.service';
 import type { ParsedRules } from '@/types/database';
+import { CHAIN_KEY_BY_ID, DEFAULT_CHAIN_ID, isSupportedChainId } from '@/constants/chains';
+
+function normalizeChainId(chainId: number): number {
+  return isSupportedChainId(chainId) ? chainId : DEFAULT_CHAIN_ID;
+}
+
+function toLedgerChain(chainId: number): string {
+  return CHAIN_KEY_BY_ID[chainId] ?? `eip155:${chainId}`;
+}
 
 export async function processAgentMint(
   walletAddress: string,
   txHash: string,
   mintAmount: number,
-  agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; avatarUrl?: string; cloneParentId?: string }
+  agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; avatarUrl?: string; cloneParentId?: string },
+  chainId: number = DEFAULT_CHAIN_ID
 ): Promise<{ success: boolean; agentId?: string; error?: string }> {
+  const activeChainId = normalizeChainId(chainId);
   const existingTx = await getTransactionByTxHash(txHash);
   if (existingTx) return { success: false, error: 'Transaction already processed' };
 
   // Verify on-chain AND validate sender matches the authenticated wallet
-  const verification = await verifyOnChainPayment(txHash, mintAmount, walletAddress);
+  const verification = await verifyOnChainPayment(txHash, mintAmount, walletAddress, activeChainId);
   if (!verification.verified) return { success: false, error: 'Payment verification failed' };
 
   const { user } = await findOrCreateUser(walletAddress);
@@ -48,7 +59,7 @@ export async function processAgentMint(
     type: 'agent_mint',
     amount: verification.amount,
     token: 'USDC',
-    chain: 'bsc',
+    chain: toLedgerChain(activeChainId),
     txHash,
     description: `Agent minted: $${capitalUsd.toFixed(2)} capital + $${(pvpPoints / 100).toFixed(2)} fuel (${AGENT_TIERS[tier].name})`,
   });
@@ -60,12 +71,14 @@ export async function processRecharge(
   walletAddress: string,
   txHash: string,
   amount: number,
-  agentId: string
+  agentId: string,
+  chainId: number = DEFAULT_CHAIN_ID
 ): Promise<{ success: boolean; pvpAdded?: number; newBalance?: number; error?: string }> {
+  const activeChainId = normalizeChainId(chainId);
   const existingTx = await getTransactionByTxHash(txHash);
   if (existingTx) return { success: false, error: 'Transaction already processed' };
 
-  const verification = await verifyOnChainPayment(txHash, amount, walletAddress);
+  const verification = await verifyOnChainPayment(txHash, amount, walletAddress, activeChainId);
   if (!verification.verified) return { success: false, error: 'Payment verification failed' };
 
   const user = await getUserByWallet(walletAddress);
@@ -81,7 +94,7 @@ export async function processRecharge(
     type: 'energy_purchase',
     amount: verification.amount,
     token: 'USDC',
-    chain: 'bsc',
+    chain: toLedgerChain(activeChainId),
     txHash,
     description: `Recharge: $${verification.amount.toFixed(2)} → +$${(pvpAdded / 100).toFixed(2)} fuel`,
   });
@@ -92,12 +105,14 @@ export async function processRecharge(
 export async function processDeposit(
   walletAddress: string,
   txHash: string,
-  expectedAmount: number
+  expectedAmount: number,
+  chainId: number = DEFAULT_CHAIN_ID
 ): Promise<{ success: boolean; balance?: number; error?: string }> {
+  const activeChainId = normalizeChainId(chainId);
   const existingTx = await getTransactionByTxHash(txHash);
   if (existingTx) return { success: false, error: 'Transaction already processed' };
 
-  const verification = await verifyOnChainPayment(txHash, expectedAmount, walletAddress);
+  const verification = await verifyOnChainPayment(txHash, expectedAmount, walletAddress, activeChainId);
   if (!verification.verified) return { success: false, error: 'Deposit verification failed' };
 
   const user = await getUserByWallet(walletAddress);
@@ -111,7 +126,7 @@ export async function processDeposit(
     type: 'deposit',
     amount: verification.amount,
     token: 'USDC',
-    chain: 'bsc',
+    chain: toLedgerChain(activeChainId),
     txHash,
     description: `Deposit: $${verification.amount}`,
     balanceBefore,

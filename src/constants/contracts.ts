@@ -6,6 +6,12 @@ export const USDT_ADDRESSES: Record<number, Address> = {
 
 export const USDC_ADDRESSES: Record<number, Address> = {
   56: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+  143: '0x754704Bc059F8C67012fEd69BC8A327a5aafb603',
+};
+
+export const USDC_DECIMALS: Record<number, number> = {
+  56: 18,
+  143: 6,
 };
 
 export const ERC20_ABI = [

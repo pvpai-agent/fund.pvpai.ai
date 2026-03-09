@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useWriteContract, useSwitchChain, useAccount } from 'wagmi';
 import { getTransferParams } from '@/lib/web3/contracts';
+import { getChainName } from '@/constants/chains';
 import type { ParsedRules } from '@/types/database';
 
 export function usePayment() {
@@ -17,11 +18,12 @@ export function usePayment() {
     setIsPending(true);
     setError(null);
     try {
+      const chainName = getChainName(chainId);
       if (currentChainId !== chainId) {
         try {
           await switchChainAsync({ chainId });
         } catch {
-          setError('Please switch your wallet to BNB Chain (BSC) to continue');
+          setError(`Please switch your wallet to ${chainName} to continue`);
           return null;
         }
       }
@@ -37,7 +39,7 @@ export function usePayment() {
       if (message.includes('user rejected') || message.includes('User denied') || message.includes('rejected')) {
         setError('Transaction rejected by user');
       } else if (message.includes('insufficient') || message.includes('exceeds balance')) {
-        setError('Insufficient USDC balance on BNB Chain');
+        setError(`Insufficient USDC balance on ${getChainName(chainId)}`);
       } else {
         setError(message);
       }
@@ -51,7 +53,8 @@ export function usePayment() {
   const verifyAgentMint = async (
     txHash: string,
     mintAmount: number,
-    agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; avatarUrl?: string; cloneParentId?: string }
+    agentInput: { name: string; prompt: string; parsedRules: ParsedRules; avatarSeed: string; avatarUrl?: string; cloneParentId?: string },
+    chainId: number
   ) => {
     try {
       const controller = new AbortController();
@@ -59,7 +62,7 @@ export function usePayment() {
       const res = await fetch('/api/payment/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash, mintAmount, agentInput }),
+        body: JSON.stringify({ txHash, mintAmount, agentInput, chainId }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -72,13 +75,14 @@ export function usePayment() {
   const verifyRecharge = async (
     txHash: string,
     amount: number,
-    agentId: string
+    agentId: string,
+    chainId: number
   ) => {
     try {
       const res = await fetch(`/api/agent/${agentId}/recharge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash, amount }),
+        body: JSON.stringify({ txHash, amount, chainId }),
       });
       return await res.json();
     } catch {
@@ -90,13 +94,14 @@ export function usePayment() {
     txHash: string,
     amount: number,
     hours: number,
-    agentId: string
+    agentId: string,
+    chainId: number
   ) => {
     try {
       const res = await fetch(`/api/agent/${agentId}/promote`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash, amount, hours }),
+        body: JSON.stringify({ txHash, amount, hours, chainId }),
       });
       return await res.json();
     } catch {

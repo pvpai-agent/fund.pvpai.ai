@@ -10,6 +10,7 @@ import { useUsdcBalance } from '@/hooks/useUsdcBalance';
 import { useConfetti } from '@/hooks/useConfetti';
 import { formatUsd } from '@/lib/utils/format';
 import type { Agent } from '@/types/database';
+import { getChainName, isSupportedChainId, resolveSupportedChainId } from '@/constants/chains';
 
 interface InvestModalProps {
   isOpen: boolean;
@@ -27,6 +28,9 @@ export function InvestModal({ isOpen, onClose, agent, onSuccess }: InvestModalPr
   const { sendPayment } = usePayment();
   const { balance: usdcBalance, isLoading: balanceLoading, refetch: refetchBalance } = useUsdcBalance();
   const { fireGoldConfetti } = useConfetti();
+  const paymentChainId = resolveSupportedChainId(currentChainId);
+  const isOnSupportedChain = isSupportedChainId(currentChainId);
+  const paymentChainName = getChainName(paymentChainId);
 
   const minInvestment = 10;
   const maxInvestment = Math.max(minInvestment, Math.min(usdcBalance, 10000));
@@ -41,7 +45,7 @@ export function InvestModal({ isOpen, onClose, agent, onSuccess }: InvestModalPr
     setError('');
 
     try {
-      const txHash = await sendPayment(56, effectiveAmount);
+      const txHash = await sendPayment(paymentChainId, effectiveAmount);
       if (!txHash) {
         setError(t.recharge.txFailed);
         setStatus('error');
@@ -54,7 +58,7 @@ export function InvestModal({ isOpen, onClose, agent, onSuccess }: InvestModalPr
       const res = await fetch(`/api/agent/${agent.id}/invest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ txHash, amount: effectiveAmount }),
+        body: JSON.stringify({ txHash, amount: effectiveAmount, chainId: paymentChainId }),
       });
       const data = await res.json();
 
@@ -94,9 +98,9 @@ export function InvestModal({ isOpen, onClose, agent, onSuccess }: InvestModalPr
             </p>
           </div>
           <div className="flex items-center gap-1.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${currentChainId === 56 ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
-            <span className={`text-[9px] font-mono ${currentChainId === 56 ? 'text-cyber-green' : 'text-cyber-red'}`}>
-              {currentChainId === 56 ? 'BSC' : t.common.wrongChain}
+            <div className={`w-1.5 h-1.5 rounded-full ${isOnSupportedChain ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
+            <span className={`text-[9px] font-mono ${isOnSupportedChain ? 'text-cyber-green' : 'text-cyber-red'}`}>
+              {isOnSupportedChain ? paymentChainName : t.common.wrongChain}
             </span>
           </div>
         </div>

@@ -20,6 +20,7 @@ import { Badge } from '@/components/ui/Badge';
 import { TerminalText } from '@/components/effects/TerminalText';
 import { NeonBorder } from '@/components/effects/NeonBorder';
 import type { ParsedRules } from '@/types/database';
+import { getChainName, isSupportedChainId, resolveSupportedChainId } from '@/constants/chains';
 
 /* ─── Types ─── */
 type Step = 'prompt' | 'genesis' | 'package' | 'deploy' | 'deploying' | 'success';
@@ -139,7 +140,9 @@ export default function CreateAgentPage() {
   const totalBurnPerDay = tier.pvp_per_day + (dataCostPerDay * METABOLISM.PVP_PER_USD);
   const lifespanDays = totalBurnPerDay > 0 ? fuelPvp / totalBurnPerDay : Infinity;
 
-  const isOnBsc = currentChainId === 56;
+  const paymentChainId = resolveSupportedChainId(currentChainId);
+  const activeChainName = getChainName(paymentChainId);
+  const isOnSupportedChain = isSupportedChainId(currentChainId);
   const hasEnoughUsdc = usdcBalance >= totalCost;
   const isDeploying = step === 'deploying';
 
@@ -232,14 +235,14 @@ export default function CreateAgentPage() {
     setError('');
     setStep('deploying');
     try {
-      const txHash = await sendPayment(56, totalCost);
+      const txHash = await sendPayment(paymentChainId, totalCost);
       if (!txHash) {
-        setError('Transaction failed or was rejected. Make sure you have enough USDC on BNB Chain.');
+        setError(`Transaction failed or was rejected. Make sure you have enough USDC on ${activeChainName}.`);
         setStep('deploy');
         setIsLoading(false);
         return;
       }
-      // BSC confirms in ~3s, wait briefly then verify with retries
+      // Wait briefly, then verify with retries while the receipt is indexed
       await new Promise((r) => setTimeout(r, 2000));
       let result: { success: boolean; error?: string; data?: { agentId?: string } } = { success: false };
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -251,7 +254,7 @@ export default function CreateAgentPage() {
           avatarSeed: seed,
           avatarUrl: avatarUrl ?? diceBearUrl(AVATAR_STYLES[avatarStyleIdx], agentName || seed),
           cloneParentId: cloneId ?? undefined,
-        });
+        }, paymentChainId);
         if (result.success) break;
         // Wait 2s before retry (tx might not be indexed yet)
         if (attempt < 2) await new Promise((r) => setTimeout(r, 2000));
@@ -916,9 +919,9 @@ export default function CreateAgentPage() {
 
               <div className="flex items-center justify-between mb-3 pb-3 border-b border-terminal-border">
                 <div className="flex items-center gap-2">
-                  <div className={`w-2 h-2 rounded-full ${isOnBsc ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
-                  <span className={`text-[10px] font-mono ${isOnBsc ? 'text-cyber-green' : 'text-cyber-red'}`}>
-                    {isOnBsc ? 'BNB Chain' : t.createAgent.wrongNetwork}
+                  <div className={`w-2 h-2 rounded-full ${isOnSupportedChain ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
+                  <span className={`text-[10px] font-mono ${isOnSupportedChain ? 'text-cyber-green' : 'text-cyber-red'}`}>
+                    {isOnSupportedChain ? activeChainName : t.createAgent.wrongNetwork}
                   </span>
                 </div>
                 <span className="text-xs font-mono text-cyber-gold">
@@ -1192,7 +1195,7 @@ export default function CreateAgentPage() {
               <Card variant="terminal" className="h-24">
                 <TerminalText lines={reconfigureId
                   ? ['[RECONFIG] Updating strategy...', '[RECONFIG] Saving new parsed rules...', '[RECONFIG] Recording version history...', '[RECONFIG] Strategy updated!']
-                  : ['[PAY] Switching to BNB Chain...', '[PAY] Sending USDC on BNB Chain...', '[PAY] Waiting for on-chain confirmation...', '[MINT] Verifying payment and creating agent...']} speed={100} />
+                  : [`[PAY] Switching to ${activeChainName}...`, `[PAY] Sending USDC on ${activeChainName}...`, '[PAY] Waiting for on-chain confirmation...', '[MINT] Verifying payment and creating agent...']} speed={100} />
               </Card>
             )}
           </motion.div>

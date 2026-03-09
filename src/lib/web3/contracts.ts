@@ -1,5 +1,6 @@
 import { type Address, type PublicClient, parseUnits, formatUnits } from 'viem';
-import { ERC20_ABI, USDC_ADDRESSES, PLATFORM_WALLET } from '@/constants/contracts';
+import { ERC20_ABI, USDC_ADDRESSES, USDC_DECIMALS, PLATFORM_WALLET } from '@/constants/contracts';
+import { getChainName, isSupportedChainId } from '@/constants/chains';
 
 export async function getTokenBalance(
   client: PublicClient,
@@ -16,12 +17,17 @@ export async function getTokenBalance(
 }
 
 export function getTransferParams(chainId: number, amount: number) {
-  if (chainId !== 56) throw new Error(`Only BNB Chain (56) is supported. Got: ${chainId}`);
+  if (!isSupportedChainId(chainId)) {
+    throw new Error(`Unsupported chain (${chainId}). Use BNB Chain (56) or Monad (143).`);
+  }
 
-  const tokenAddress = USDC_ADDRESSES[56];
-  if (!tokenAddress) throw new Error('USDC address not configured for BSC');
+  const tokenAddress = USDC_ADDRESSES[chainId];
+  const decimals = USDC_DECIMALS[chainId];
+  if (!tokenAddress || typeof decimals !== 'number') {
+    throw new Error(`USDC address not configured for ${getChainName(chainId)}`);
+  }
 
-  const parsedAmount = parseUnits(amount.toString(), 18);
+  const parsedAmount = parseUnits(amount.toString(), decimals);
 
   return {
     address: tokenAddress,

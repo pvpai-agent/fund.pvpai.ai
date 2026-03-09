@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { processAgentMint } from '@/services/payment.service';
 import { METABOLISM } from '@/constants/trading';
 import { requireAuth, rateLimit } from '@/lib/auth';
+import { DEFAULT_CHAIN_ID, isSupportedChainId } from '@/constants/chains';
 
 export async function POST(req: NextRequest) {
   const limited = rateLimit(req, 10, 60_000);
@@ -11,7 +12,7 @@ export async function POST(req: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const { txHash, mintAmount, agentInput } = await req.json();
+    const { txHash, mintAmount, agentInput, chainId } = await req.json();
 
     if (!txHash || !mintAmount || !agentInput) {
       return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 });
@@ -20,8 +21,12 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, error: `Minimum mint amount is $${METABOLISM.MIN_MINT_USD}` }, { status: 400 });
     }
 
+    const activeChainId = typeof chainId === 'number' && isSupportedChainId(chainId)
+      ? chainId
+      : DEFAULT_CHAIN_ID;
+
     // Use wallet from session, not from client body
-    const result = await processAgentMint(auth.wallet, txHash, mintAmount, agentInput);
+    const result = await processAgentMint(auth.wallet, txHash, mintAmount, agentInput, activeChainId);
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error }, { status: 400 });
     }

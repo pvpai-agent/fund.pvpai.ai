@@ -8,6 +8,7 @@ import { useUsdcBalance } from '@/hooks/useUsdcBalance';
 import { formatUsd, shortenAddress } from '@/lib/utils/format';
 import { GlitchText } from '@/components/effects/GlitchText';
 import { useT } from '@/hooks/useTranslation';
+import { getChainName, isSupportedChainId } from '@/constants/chains';
 
 export function Header() {
   const { isConnected, address } = useUser();
@@ -16,7 +17,9 @@ export function Header() {
   const { balance: usdcBalance } = useUsdcBalance();
   const t = useT();
 
-  const isOnBsc = chainId === 56;
+  const isOnSupportedChain = isSupportedChainId(chainId);
+  const chainLabel = isOnSupportedChain ? getChainName(chainId) : t.common.wrongChain;
+  const openNetworkSelector = () => open({ view: 'Networks' });
 
   return (
     <header className="sticky top-0 z-40 border-b border-terminal-border bg-cyber-black/90 backdrop-blur-sm">
@@ -59,12 +62,18 @@ export function Header() {
                   {formatUsd(usdcBalance)} USDC
                 </span>
                 <span className="text-xs font-mono text-gray-600">|</span>
-                <div className="flex items-center gap-1.5">
-                  <div className={`w-1.5 h-1.5 rounded-full ${isOnBsc ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
+                <button
+                  type="button"
+                  onClick={openNetworkSelector}
+                  className="flex items-center gap-1.5 rounded px-1 py-0.5 hover:bg-cyber-blue/10 transition-colors"
+                  title="Switch network"
+                  aria-label="Switch network"
+                >
+                  <div className={`w-1.5 h-1.5 rounded-full ${isOnSupportedChain ? 'bg-cyber-green' : 'bg-cyber-red animate-pulse'}`} />
                   <span className="text-[10px] font-mono text-gray-500">
-                    {isOnBsc ? 'BSC' : t.common.wrongChain}
+                    {chainLabel}
                   </span>
-                </div>
+                </button>
               </div>
 
               <button

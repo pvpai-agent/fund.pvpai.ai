@@ -2,25 +2,28 @@
 
 import { useReadContract, useAccount } from 'wagmi';
 import { formatUnits } from 'viem';
-import { USDC_ADDRESSES, ERC20_ABI } from '@/constants/contracts';
+import { USDC_ADDRESSES, USDC_DECIMALS, ERC20_ABI } from '@/constants/contracts';
+import { DEFAULT_CHAIN_ID, isSupportedChainId } from '@/constants/chains';
 
 /**
- * Reads the user's on-chain USDC balance on BSC (chain 56).
- * BSC-pegged USDC uses 18 decimals.
+ * Reads the user's on-chain USDC balance on the active supported chain.
  */
 export function useUsdcBalance() {
-  const { address } = useAccount();
+  const { address, chainId: currentChainId } = useAccount();
+  const chainId = isSupportedChainId(currentChainId) ? currentChainId : DEFAULT_CHAIN_ID;
+  const tokenAddress = USDC_ADDRESSES[chainId];
+  const decimals = USDC_DECIMALS[chainId] ?? 18;
 
   const { data, isLoading, refetch } = useReadContract({
-    address: USDC_ADDRESSES[56],
+    address: tokenAddress,
     abi: ERC20_ABI,
     functionName: 'balanceOf',
     args: address ? [address] : undefined,
-    chainId: 56,
+    chainId,
     query: { enabled: !!address },
   });
 
-  const balance = data ? Number(formatUnits(data as bigint, 18)) : 0;
+  const balance = data ? Number(formatUnits(data as bigint, decimals)) : 0;
 
-  return { balance, isLoading, refetch };
+  return { balance, isLoading, refetch, chainId };
 }

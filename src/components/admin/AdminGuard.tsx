@@ -5,6 +5,7 @@ import { useAccount, useSwitchChain } from 'wagmi';
 import { useAppKit } from '@reown/appkit/react';
 import { isAdminWallet } from '@/lib/admin';
 import { Button } from '@/components/ui/Button';
+import { DEFAULT_CHAIN_ID, isSupportedChainId } from '@/constants/chains';
 
 export function AdminGuard({ children }: { children: React.ReactNode }) {
   const { isConnected, address, chainId } = useAccount();
@@ -12,8 +13,8 @@ export function AdminGuard({ children }: { children: React.ReactNode }) {
   const { switchChain } = useSwitchChain();
 
   useEffect(() => {
-    if (isConnected && chainId && chainId !== 56) {
-      switchChain({ chainId: 56 });
+    if (isConnected && chainId && !isSupportedChainId(chainId)) {
+      switchChain({ chainId: DEFAULT_CHAIN_ID });
     }
   }, [isConnected, chainId, switchChain]);
 

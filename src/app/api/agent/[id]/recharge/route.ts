@@ -4,6 +4,7 @@ import { getUserByWallet } from '@/services/user.service';
 import { processRecharge } from '@/services/payment.service';
 import { METABOLISM } from '@/constants/trading';
 import { requireAuth, rateLimit } from '@/lib/auth';
+import { DEFAULT_CHAIN_ID, isSupportedChainId } from '@/constants/chains';
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const limited = rateLimit(req, 10, 60_000);
@@ -14,7 +15,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   try {
     const { id } = await params;
-    const { txHash, amount } = await req.json();
+    const { txHash, amount, chainId } = await req.json();
 
     if (!txHash || typeof amount !== 'number') {
       return NextResponse.json({ success: false, error: 'Missing required fields' }, { status: 400 });
@@ -34,7 +35,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     if (agent.status === 'dead') return NextResponse.json({ success: false, error: 'Cannot recharge a dead agent' }, { status: 400 });
 
-    const result = await processRecharge(auth.wallet, txHash, amount, id);
+    const activeChainId = typeof chainId === 'number' && isSupportedChainId(chainId)
+      ? chainId
+      : DEFAULT_CHAIN_ID;
+
+    const result = await processRecharge(auth.wallet, txHash, amount, id, activeChainId);
     if (!result.success) {
       return NextResponse.json({ success: false, error: result.error }, { status: 400 });
     }
