@@ -2,7 +2,7 @@
  * In-memory mock database for development without Supabase.
  * Data persists as long as the Next.js dev server is running.
  */
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import type { User, Agent, Transaction, EnergyLog, Investment } from '@/types/database';
 import type { LobbyEvent, LobbyEventType } from '@/types/events';
 import type { ChatMessage, ChatRole, OverrideStatus } from '@/types/chat';
@@ -10,6 +10,13 @@ import type { ParsedRules } from '@/types/database';
 
 function uuid(): string {
   return randomUUID();
+}
+
+function stableUuid(seed: string): string {
+  const hash = createHash('sha256').update(seed).digest('hex');
+  const version = `5${hash.slice(13, 16)}`;
+  const variant = ((parseInt(hash[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${version}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
 }
 
 function now(): string {
@@ -838,7 +845,7 @@ function seedDemoData(): void {
   store.seeded = true;
 
   // Create a demo "system" user for seeded agents
-  const systemUserId = uuid();
+  const systemUserId = stableUuid('seed:user:system');
   const systemUser: User = {
     id: systemUserId,
     wallet_address: '0x0000000000000000000000000000000000000000',
@@ -862,13 +869,36 @@ function seedDemoData(): void {
     '0xdead1234567890abcdef1234567890abcdef0789',
   ];
   const creatorIds: string[] = [];
-  for (const wallet of creatorWallets) {
-    const { user } = mockFindOrCreateUser(wallet);
-    creatorIds.push(user.id);
+  for (const [index, wallet] of creatorWallets.entries()) {
+    const addr = wallet.toLowerCase();
+    const existingId = usersByWallet.get(addr);
+    if (existingId) {
+      creatorIds.push(existingId);
+      continue;
+    }
+
+    const id = stableUuid(`seed:user:${addr}`);
+    const user: User = {
+      id,
+      wallet_address: addr,
+      display_name: `Seed Creator ${index + 1}`,
+      referral_code: `SEED${index + 1}`,
+      referred_by: null,
+      balance_usdt: 1000,
+      pvpai_points: 0,
+      created_at: now(),
+      updated_at: now(),
+    };
+    users.set(id, user);
+    usersByWallet.set(addr, id);
+    creatorIds.push(id);
   }
 
-  for (const seed of SEED_AGENTS) {
-    const creatorId = creatorIds[Math.floor(Math.random() * creatorIds.length)];
+  for (const [seedIndex, seed] of SEED_AGENTS.entries()) {
+    const seedKey = `${seed.name}:${seed.assets[0]}:${seedIndex}`;
+    const seedHashHex = createHash('sha256').update(seedKey).digest('hex');
+    const creatorSlot = parseInt(seedHashHex.slice(0, 8), 16) % creatorIds.length;
+    const creatorId = creatorIds[creatorSlot];
     const createdAt = new Date(Date.now() - seed.daysAgo * 86400000).toISOString();
     const diedAt = seed.status === 'dead'
       ? new Date(Date.now() - (seed.daysAgo - 1) * 86400000).toISOString()
@@ -883,9 +913,10 @@ function seedDemoData(): void {
       .reduce((h, c) => ((h * 31 + c.charCodeAt(0)) >>> 0), 0);
     const walletHex = walletHash.toString(16).padStart(8, '0').repeat(5);
     const aiWallet = '0x' + walletHex.slice(0, 40);
+    const deterministicEnergy = 500 + (parseInt(seedHashHex.slice(8, 12), 16) % 2000);
 
     const agent: Agent = {
-      id: uuid(),
+      id: stableUuid(`seed:agent:${seedKey}`),
       user_id: creatorId,
       name: seed.name,
       prompt: seed.prompt,
@@ -909,11 +940,11 @@ function seedDemoData(): void {
         keywords: seed.keywords,
         tier: seed.tier,
       },
-      avatar_seed: uuid(),
+      avatar_seed: stableUuid(`seed:avatar:${seedKey}`),
       avatar_url: null,
       status: seed.status,
       allocated_funds: seed.allocated,
-      energy_balance: seed.status === 'dead' ? 0 : 500 + Math.random() * 2000,
+      energy_balance: seed.status === 'dead' ? 0 : deterministicEnergy,
       capital_balance: seed.capital,
       burn_rate_per_hour: burnRate,
       died_at: diedAt,
@@ -929,7 +960,7 @@ function seedDemoData(): void {
 
     // Add lobby event for each agent
     store.lobbyEvents.push({
-      id: uuid(),
+      id: stableUuid(`seed:event:born_or_dead:${seedKey}`),
       type: seed.status === 'dead' ? 'agent_died' : 'agent_born',
       agent_id: agent.id,
       agent_name: seed.name,

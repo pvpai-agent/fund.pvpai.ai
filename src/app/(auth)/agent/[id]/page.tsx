@@ -1,7 +1,7 @@
 'use client';
 
-import { use, useState, useEffect, useCallback, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter, useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { useAccount } from 'wagmi';
 import { useAgent } from '@/hooks/useAgent';
@@ -33,8 +33,9 @@ import { useT } from '@/hooks/useTranslation';
 import { getAgentAssets } from '@/types/database';
 import { getChainName, isSupportedChainId, resolveSupportedChainId } from '@/constants/chains';
 
-export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = use(params);
+export default function AgentDetailPage() {
+  const routeParams = useParams<{ id: string }>();
+  const id = routeParams?.id ?? '';
   const router = useRouter();
   const { address, chainId: currentChainId } = useAccount();
   const { agent, trades, energyData, isLoading, refetchAgent } = useAgent(id);

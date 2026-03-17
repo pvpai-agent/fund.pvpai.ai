@@ -18,6 +18,14 @@ export function useAgent(agentId: string) {
   const [isLoading, setIsLoading] = useState(true);
 
   const fetchAgent = useCallback(async () => {
+    if (!agentId) {
+      setAgent(null);
+      setTrades([]);
+      setEnergyData(null);
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     try {
       const [agentRes, tradesRes, energyRes] = await Promise.all([
