@@ -34,8 +34,6 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
   const { id } = await params;
   const agent = await getAgentById(id);
   if (!agent) return NextResponse.json({ success: false, error: 'Agent not found' }, { status: 404 });
-  if (agent.user_id !== user.id) return NextResponse.json({ success: false, error: 'Not your agent' }, { status: 403 });
-
   try {
     // Get all agent assets; use first as "primary" for display, but fetch all for positions
     const agentAssets = getAgentAssets(agent.parsed_rules);
