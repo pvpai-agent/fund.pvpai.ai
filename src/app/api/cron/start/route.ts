@@ -84,6 +84,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
   }
 
+  // DISABLED-FOR-MIGRATION: in-process scheduler is off.
+  // Re-enable by deleting this block; Vercel Cron (vercel.json) is the intended production path.
+  return NextResponse.json(
+    { success: false, error: 'Scheduler disabled for migration' },
+    { status: 503 },
+  );
+
   if (getIsRunning()) {
     return NextResponse.json({
       success: true,
